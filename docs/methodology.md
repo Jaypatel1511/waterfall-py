@@ -29,7 +29,7 @@
 **DECISIONS TO LOCK:**
 - Rate types supported: fixed, floating (index + spread, with caps/floors), step-up, PIK (toggle per period), default rate accrual.
 - Floating-rate indices: SOFR, Term SOFR (1M/3M/6M), SOFR-OIS, EURIBOR (if multi-currency added later). Index reset schedule (in advance vs. arrears, lookback days).
-- Day-count conventions: 30/360, ACT/360, ACT/365, ACT/ACT. Default per tranche-type convention (CRE senior usually ACT/360, project finance often 30/360 — confirm).
+- Day-count conventions: 30/360, ACT/360, ACT/365, ACT/ACT. Default per tranche-type convention (CRE senior usually ACT/360, project finance usually ACT/360 for US bank loans — confirm).
 - Accrual vs. payment timing: accrue daily, pay periodically. Stub periods at close and final maturity computed pro-rata.
 - PIK behavior: capitalize to principal at end of period, or accrue and pay at maturity? Recommend: configurable per tranche; default to capitalize end-of-period.
 
@@ -164,13 +164,10 @@
 ## Citations (To Verify)
 
 - LSTA (Loan Syndications and Trading Association) — Model Credit Agreement Provisions, ECF definitions, cure rights
-- SIFMA CMBS Investor Reporting Package — covenant testing conventions (note: loan-level only, not bond-level)
 - ULI / NAIOP — CRE underwriting standards
 - MBA Commercial/Multifamily Mortgage Origination data conventions
 - World Bank PPP Reference Guide — project finance debt sizing and DSCR conventions
 - S&P Global Ratings: Project Finance Framework — LLCR/PLCR computation
-- Moody's CMBS Surveillance criteria — covenant testing
-- Greene §17.x (numerical methods) — if iterative solver needed for sculpted amort
 
 ## Release Process
 
