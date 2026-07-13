@@ -1,6 +1,6 @@
 # waterfall-py: Methodology
 
-> **STATUS: DECISIONS LOCKED (PASS-3 RESOLVED) — PENDING FRESH RE-AUDIT #3.** Lineage: skeleton (53294fc) → first hostile audit `methodology_audit.md` (2 CRIT / 5 HIGH / 6 MED / 5 LOW) → mechanical fixes f87f689 (CRIT-1/2, HIGH-3/5) → first resolution 9875f44 → **second hostile audit `methodology_audit_pass2.md` (methodology-review-pass2, ffb2af9): NO-GO, 2 CRIT / 4 HIGH / 6 MED / 4 LOW** → pass-2 resolution → **third hostile audit `methodology_audit_pass3.md` (methodology-review-pass3, a28168c): NO-GO, 1 CRIT / 0 HIGH / 5 MED / 6 LOW** → this revision. Pass-2 removed the authority-per-mechanic approach and defines every computed metric inline by formula. The pass-3 CRITICAL was self-inflicted: the pass-2 fix for the ECF double-count netted required reserve funding *into* the CFADS definition, which ranks reserves above debt service (backwards) and manufactures false covenant breaches. This revision **removes that term from CFADS** (CFADS is again cash available for debt service, net of maintenance capex only), moves required reserve funding to an explicit waterfall step below debt service, and states a single ordered waterfall. Per working principle #1, this resolved methodology must pass a fresh-session hostile re-audit (0 CRIT / 0 HIGH) BEFORE any analysis code is written.
+> **STATUS: DECISIONS LOCKED (PASS-4 RESOLVED) — PENDING FRESH RE-AUDIT #4.** Lineage: skeleton (53294fc) → first hostile audit `methodology_audit.md` (2 CRIT / 5 HIGH / 6 MED / 5 LOW) → mechanical fixes f87f689 (CRIT-1/2, HIGH-3/5) → first resolution 9875f44 → **second hostile audit `methodology_audit_pass2.md` (methodology-review-pass2, ffb2af9): NO-GO, 2 CRIT / 4 HIGH / 6 MED / 4 LOW** → pass-2 resolution → **third hostile audit `methodology_audit_pass3.md` (methodology-review-pass3, a28168c): NO-GO, 1 CRIT / 0 HIGH / 5 MED / 6 LOW** → this revision. Pass-2 removed the authority-per-mechanic approach and defines every computed metric inline by formula. The pass-3 CRITICAL was self-inflicted: the pass-2 fix for the ECF double-count netted required reserve funding *into* the CFADS definition, which ranks reserves above debt service (backwards) and manufactures false covenant breaches. This revision **removes that term from CFADS** (CFADS is again cash available for debt service, net of maintenance capex only), moves required reserve funding to an explicit waterfall step below debt service, and states a single ordered waterfall. **Fourth hostile audit `methodology_audit_pass4.md` (methodology-review-pass4, 3b41060): NO-GO, 0 CRIT / 1 HIGH / 2 MED / 6 LOW** — the pass-3 CRITICAL was confirmed correctly fixed, but the new Waterfall Priority ladder and the carried-over ECF formula contradicted each other on three of four terms (self-inflicted, same class as prior rounds). This revision makes **ECF a quantity *derived from* the ladder** (ECF ≡ cash remaining after ladder steps 1–4) so the two can no longer drift, separates non-CFADS mandatory-prepayment proceeds from the operating waterfall, repoints the Reserves cross-references at the ladder by rung number, adds a cash-conservation assertion, and closes all six carried LOWs. Per working principle #1, this resolved methodology must pass a fresh-session hostile re-audit (0 CRIT / 0 HIGH) BEFORE any analysis code is written.
 
 ## v0.x Scope Posture
 
@@ -61,35 +61,38 @@ waterfall-py v0.x is a **tight core**: a period-by-period mechanical debt-waterf
 - **Reserve types:** DSRA, IRA, MRA, capex, lease-up, TI/LC.
 - **DSRA draw / replenish / release (LOCKED — resolves pass-2 "inert DSRA"):**
   - **Draw:** when period CFADS is insufficient to cover scheduled debt service, the DSRA is drawn to cover the shortfall (down to zero). This is the mechanism by which negative or sub-debt-service CFADS (MED-5 pass-through) is absorbed rather than silently ignored.
-  - **Replenish:** the DSRA is topped back up to its required balance from subsequent surplus CFADS, **ahead of any equity distribution and ahead of discretionary sweep application**, and behind scheduled senior debt service.
-  - **Release:** remaining balance released at final maturity (or per a documented trigger).
-- **IRA (LOCKED):** funded at close → opening reserve balance at period 0; released on stabilization trigger. No construction-period drawdown (operations-only horizon). *(MED-2.)*
+  - **Replenish:** the DSRA is topped back up to its required balance at **Waterfall Priority step 3** — below step 2 (senior debt service), above step 4 (mezzanine service) and step 5 (the mandatory ECF sweep). (References the ladder by rung, so it cannot be read against it — resolves MED-2.)
+  - **Release:** remaining balance released at final maturity (or per a trigger — see Triggers below).
+- **IRA (LOCKED — pass-through only; resolves LOW-5):** the interest reserve account exists to fund construction-period interest, which is out of scope. In the operations-only horizon it is therefore **a pass-through opening balance**: carried in at period 0 as available liquidity and released on its user-supplied trigger period. The engine does **not** draw it for construction interest (there is no construction period modeled). If a deal has no operating-period interest-reserve mechanic, IRA is simply omitted.
 - **Sizing rules:** N months debt service (DSRA), N months interest (IRA), % revenue (MRA), schedule-based (capex), trigger-based (lease-up). Documented per type.
+- **Triggers (LOCKED — resolves LOW-6):** every reserve trigger (DSRA/IRA release, lease-up funding/release, stabilization) must resolve to **a user-supplied period index or an engine-computable test** (e.g., sustained DSCR ≥ x for n periods). Triggers may **never** reference an un-modeled condition such as physical occupancy — the engine tracks no occupancy/lease-up state and the period table carries no such field.
 - **Funding priority:** pre-funded at close vs. from operations vs. hybrid — default per reserve type.
-- **Required vs. discretionary:** required/contractual reserve funding is an explicit waterfall step **below debt service and above the sweep** (see Waterfall Priority); it is deducted once in the ECF sweep base. It is **never** netted into CFADS. Discretionary reserve top-ups, if any, rank with permitted distributions.
+- **Required vs. discretionary:** required/contractual reserve funding is **Waterfall Priority step 3** — below step 2 (senior debt service), above step 4 (mezzanine) and step 5 (the mandatory ECF sweep); it is deducted once in the ECF base (step 5), which is derived from the ladder. It is **never** netted into CFADS. Discretionary reserve top-ups rank at **step 6** with permitted junior uses.
 - **LC alternative:** `lc_funded=True` — no cash reserve, treated as "available" for shortfall.
 
 ## Waterfall Priority (Single Ordered Sequence) — LOCKED
 
-Each operating period, available cash (CFADS) is applied in **one acyclic priority order** (resolves the pass-3 MED that the priority was never stated as a single sequence). This is the default; specific tranche seniority is configurable within these constraints, but the ordering is always a strict sequence with no cycles:
+Each operating period, **operating cash (CFADS)** is applied in **one acyclic priority order**. This is the default; specific tranche seniority is configurable within these constraints, but the ordering is always a strict sequence with no cycles. **This ladder is the single source of truth for cash priority; the ECF sweep base (Cash Sweep Mechanics) is *derived from* it, not defined independently.**
 
 1. **Senior fees and administrative expenses** (agency, trustee, servicing) not already in opex.
 2. **Senior debt service** — interest, then scheduled principal (pari-passu within the senior group, pro-rata by current balance). If CFADS is insufficient, **draw the DSRA** to cover the shortfall (Reserves).
-3. **Required reserve funding / replenishment** — DSRA back to required balance, then other required reserves. Ranks below debt service, above all subordinate uses.
+3. **Required reserve funding / replenishment** — DSRA back to required balance, then other required reserves.
 4. **Mezzanine / subordinate debt service** — interest, then scheduled principal.
-5. **Mandatory prepayments and ECF cash sweep** — event-triggered mandatory prepayments and the leverage-banded ECF sweep (ECF as defined in Cash Sweep Mechanics).
-6. **Permitted equity distributions** — blocked entirely under a covenant lock-up / cash-trap. Excluded SPV tax distributions, if supplied as inputs, are permitted here even during lock-up (Scope/MED-1).
+5. **Mandatory ECF cash sweep** — the leverage-banded sweep applies `sweep% × ECF` to senior prepayment, where **ECF ≡ the cash remaining after steps 1–4** (see Cash Sweep Mechanics). Event-driven mandatory prepayments funded by **non-CFADS proceeds** (asset sale, insurance/condemnation, debt/equity issuance) are **not** part of this operating-cash ladder — they apply their own proceeds on a separate application (see Mandatory Prepayments).
+6. **Permitted junior uses from retained ECF** — the un-swept `(1 − sweep%) × ECF` funds, subject to lock-up/cash-trap conditions: permitted growth/discretionary capex and permitted equity distributions (and discretionary reserve top-ups). All are **blocked under a covenant lock-up / cash-trap**. Excluded SPV tax distributions, if supplied as inputs, are permitted here even during lock-up (Scope/MED-1).
 7. **Residual cash to equity.**
 
-The ordering is asserted acyclic and total: every dollar of CFADS is assigned to exactly one step, and no step depends on a later step. Default: senior reserve replenishment (step 3) ranks ahead of mezzanine debt service (step 4) — a senior-protective convention; configurable where a deal's ICA reverses it.
+The ordering is asserted **acyclic and total over operating CFADS**: every dollar of CFADS is assigned to exactly one step, no step depends on a later step, and a cash-conservation assertion (Validation Tests) verifies steps 1–7 sum to CFADS each period. Default: senior reserve replenishment (step 3) ranks ahead of mezzanine debt service (step 4) — a senior-protective convention; configurable where a deal's ICA reverses it. Because ECF is defined as the residual after step 4, growth capex and permitted distributions sit at step 6 (junior to the sweep) and are **not** deducted in the ECF base — the pass-4 HIGH-1 contradiction cannot recur.
 
 ## Covenant Pack — LOCKED
 
 - **Ratios and their inline definitions (no external authority; arithmetic is self-defining):**
   - **DSCR** = CFADS ÷ scheduled debt service, per period. Trailing / forward-looking and average-vs-minimum are configurable.
   - **LLCR** = PV(CFADS from the test date to **loan maturity**, discounted at the senior debt cost) ÷ current senior debt balance. DSRA balance may be added to the numerator (configurable; default excluded). *(Resolves pass-2 LLCR discount-rate/horizon gap.)*
-  - **PLCR** = PV(CFADS from the test date to **end of project life**, discounted at the senior debt cost) ÷ current debt balance. Horizon extends beyond loan maturity to the project/asset/concession life.
+  - **PLCR** = PV(CFADS from the test date to **end of project life**, discounted at the senior debt cost) ÷ **current senior debt balance** (same denominator as LLCR — resolves LOW-3). Horizon extends beyond loan maturity to the project/asset/concession life. **PLCR, and the LLCR project-life horizon, are project-finance-only** — CRE deals have no project/concession life and do not compute PLCR; CRE coverage uses DSCR, LTV, and debt yield. *(Resolves LOW-2.)*
   - Discount rate for LLCR/PLCR = the weighted senior debt cost, configurable and disclosed in the audit log.
+  - **Applicability:** DSCR, LTV, debt yield apply to both CRE and PF; LLCR/PLCR and Debt/EBITDA/fixed-charge coverage are used where the deal type warrants (PF and corporate-style credits respectively). Each metric's applicability is recorded with its result.
+  - **Division-by-zero / undefined (LOCKED — resolves LOW-1):** once the relevant denominator is zero — scheduled debt service = 0 (DSCR) or current debt balance = 0 (LLCR/PLCR/LTV), e.g., after full repayment via sweeps/prepayments — the covenant is **not tested** and the ratio is reported as **n/a** (never ∞, 0, or a raised error). Testing resumes only if a positive balance/debt service returns.
   - LTV, debt yield, Debt/EBITDA, fixed-charge coverage, interest coverage — each defined inline by formula at implementation.
 - **Testing frequency:** quarterly / semi-annual / annual, annual averages where applicable; configurable per covenant. **No covenant is tested before period 0** (operations-only horizon).
 - **Covenant types:** maintenance / springing / incurrence.
@@ -100,11 +103,12 @@ The ordering is asserted acyclic and total: every dollar of CFADS is assigned to
 
 - **Sweep types:** mandatory (ECF above thresholds), discretionary (borrower election), event-triggered (covenant breach).
 - **Leverage-banded step-downs:** e.g., 100% / 75% / 50% / 0% across configurable leverage bands.
-- **ECF definition — LOCKED (HIGH-1 + pass-2 reserve double-count):** single formula for both CRE and PF —
-  **ECF = CFADS − scheduled debt service − required reserve funding/replenishment − permitted distributions − permitted capex (growth/discretionary only).**
-  CFADS is net of maintenance capex only (see Cash Flow Source Assumptions), so the ECF formula deducts **growth/discretionary capex only** (never maintenance capex — that would double-count). Required reserve funding/replenishment is deducted here **once**, matching its position in the Waterfall Priority (below debt service, above the sweep). It is *not* in CFADS, so there is no double-count. *(Resolves HIGH-1 and the pass-2/pass-3 reserve-funding treatment.)*
-- **Exclusions from sweep:** permitted acquisitions, permitted distributions below leverage threshold, working-capital fluctuations. Configurable.
-- **Application order:** configurable (senior pro-rata / last-out-first).
+- **ECF definition — LOCKED (derived from the ladder; resolves pass-4 HIGH-1):** ECF is **not an independent formula** — it is the cash remaining after Waterfall Priority steps 1–4, so it can never contradict the ladder. Equivalently:
+  **ECF = CFADS − senior fees & admin (step 1) − senior debt service (step 2) − required reserve funding/replenishment (step 3) − mezzanine debt service (step 4).**
+  Every deduction is a ladder rung *above* the sweep, and every rung above the sweep is a deduction — the set matches exactly. "Debt service" here is **all** debt service ranking above the sweep: senior (step 2) **and** mezzanine (step 4). CFADS is net of maintenance capex only, so maintenance capex is not deducted again. **Growth/discretionary capex and permitted distributions are NOT deducted** — they are step-6 junior uses funded from retained ECF, below the sweep. Required reserve funding is deducted here exactly once, mirroring its single cash outflow at step 3 (it is not in CFADS). Same formula for CRE and PF. *(Resolves HIGH-1: distributions and growth capex removed from the base, senior fees added, mezz made explicit.)*
+- **Sweep and retained ECF:** the sweep captures `sweep% × ECF` (per leverage band); the retained `(1 − sweep%) × ECF` funds step-6 permitted junior uses subject to lock-up/conditions.
+- **Carve-outs from the sweep base:** because ECF is the residual after steps 1–4, sweep carve-outs are handled as adjustments to CFADS *before* the ladder (e.g., non-recurring/non-operating proceeds and working-capital true-ups excluded from operating CFADS), not as deductions inside the ECF formula. Permitted acquisitions and permitted distributions are junior uses (step 6), **not** sweep-base carve-outs — keeping the base consistent with the ladder. Configurable.
+- **Application order:** configurable (senior pro-rata, or sequential by seniority/maturity). "Sequential" here means ordinary seniority/maturity ordering of prepayment among the in-scope tranches — **not** a last-out/FLLO or agreement-among-lenders construct (those, with A/B and B-piece mechanics, are out of scope; see Limitations). *(Resolves LOW-4.)*
 
 ## Cure Rights — LOCKED
 
@@ -115,8 +119,8 @@ The ordering is asserted acyclic and total: every dollar of CFADS is assigned to
 
 ## Mandatory Prepayments — LOCKED
 
-- **Triggers:** ECF sweep, asset-sale proceeds, insurance/condemnation, debt incurrence, change of control, equity issuance.
-- **Reinvestment rights:** configurable window (typical 12–18 months) per trigger.
+- **Two distinct cash sources (LOCKED — resolves MED-1):** the **ECF sweep** is funded by operating CFADS and lives at step 5 of the Waterfall Priority. **Event-driven mandatory prepayments** — asset-sale proceeds, insurance/condemnation, debt incurrence, change of control, equity issuance — are funded by **non-operating proceeds**, not CFADS. They are applied on their **own separate application** (below) and are **not** part of the operating-cash ladder; the "every dollar of CFADS is assigned to exactly one step" invariant covers operating CFADS only.
+- **Reinvestment rights:** configurable window (typical 12–18 months) per proceeds trigger.
 - **Application order:** senior pro-rata to scheduled amort, then next maturity, then revolver. Configurable.
 - **Premium:** none by default (optional prepayments may carry call protection).
 
@@ -132,7 +136,7 @@ The ordering is asserted acyclic and total: every dollar of CFADS is assigned to
 
 - **Non-call period:** hard NC for N years (configurable).
 - **Declining call schedule:** e.g., NC-2, 102, 101, par (configurable per tranche).
-- **Make-whole:** discount of remaining scheduled cash flows to a comparable-treasury reference. **Spread is a required input with no default** — T+50 / T+25 are market approximations, not published conventions, and are not hard-coded. *(LOW-1.)*
+- **Make-whole:** discount of remaining scheduled cash flows to a comparable-treasury reference. **Spread is a required input with no default** — T+50 / T+25 are market approximations, not published conventions, and are not hard-coded. *(pass-1 LOW-1, make-whole spread.)*
 - **Yield maintenance only** in v0.x; defeasance deferred.
 - **Par-call windows:** configurable (typical last 3–6 months at par).
 
@@ -150,7 +154,7 @@ The ordering is asserted acyclic and total: every dollar of CFADS is assigned to
 
 ## Required vs. Optional Parameters — LOCKED
 
-- **Required (raise `InvalidInputError`):** `deal_close_date`, `operations_start_date` (period 0), `period_frequency` (M/Q/SA/A), `tranches`, `cfads_stream`.
+- **Required (raise `InvalidInputError`):** `deal_close_date`, `operations_start_date` (period 0), `period_frequency` (M/Q/SA/A), `tranches`, `cfads_stream`. Validated constraint: `operations_start_date >= deal_close_date` (close is the source/use snapshot; accrual and periods begin at operations start).
 - **Required with validation:** `data_currency` (ISO 4217), `reporting_basis` (calendar / fiscal).
 - **Optional with documented defaults:** `day_count` (per tranche-type default), `business_day_convention` (Modified Following), `payment_calendar` (U.S. Federal Reserve), `sofr_calendar` (SIFMA US Government Securities), reserve sizing (per type), covenant levels (none by default — explicit only).
 - All optional defaults documented inline in code AND here (single source of truth).
@@ -159,6 +163,7 @@ The ordering is asserted acyclic and total: every dollar of CFADS is assigned to
 
 These audit assertions are the **primary defensibility mechanism for numeric output**:
 - **Source/use tie-out at close:** sum of sources = sum of uses; `SourceUseImbalanceError` above tolerance.
+- **Cash-conservation (waterfall totality) — LOCKED:** each period, the sum of Waterfall Priority steps 1–7 (all outflows plus residual to equity) equals CFADS, within tolerance; `WaterfallImbalanceError` otherwise. This programmatically enforces the "every dollar of CFADS is assigned to exactly one step" invariant and guards against a future ECF/ladder drift (the pass-4 HIGH-1 class).
 - **Principal trace:** opening + draws − scheduled amort − prepayments − sweeps = closing, per tranche per period. Asserted every period.
 - **Interest accrual reconciliation:** rate × average balance × day-count fraction = period interest, within tolerance.
 - **Reserve roll-forward:** opening reserve + funding − draws + replenishment = closing, per reserve per period (covers the new DSRA draw/replenish logic).
