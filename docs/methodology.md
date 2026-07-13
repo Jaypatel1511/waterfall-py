@@ -1,6 +1,6 @@
 # waterfall-py: Methodology
 
-> **STATUS: DECISIONS LOCKED (PASS-2 RESOLVED) — PENDING FRESH RE-AUDIT #2.** Lineage: skeleton (53294fc) → first hostile audit `methodology_audit.md` (2 CRIT / 5 HIGH / 6 MED / 5 LOW) → mechanical fixes f87f689 (CRIT-1/2, HIGH-3/5) → first resolution 9875f44 → **second hostile audit `methodology_audit_pass2.md` (methodology-review-pass2, ffb2af9): NO-GO, 2 CRIT / 4 HIGH / 6 MED / 4 LOW** → this revision. The pass-2 CRITICALs were self-inflicted: the prior "Citations — RESOLVED" section reintroduced the CRIT-2/HIGH-5 antipattern by asserting authorities (LSTA MCAP "June 2025", S&P "Project Finance Framework", MBA for underwriting) that fail external verification. This revision **removes the authority-per-mechanic approach entirely** and defines every computed metric inline by formula. Per working principle #1, this resolved methodology must pass a fresh-session hostile re-audit (0 CRIT / 0 HIGH) BEFORE any analysis code is written.
+> **STATUS: DECISIONS LOCKED (PASS-3 RESOLVED) — PENDING FRESH RE-AUDIT #3.** Lineage: skeleton (53294fc) → first hostile audit `methodology_audit.md` (2 CRIT / 5 HIGH / 6 MED / 5 LOW) → mechanical fixes f87f689 (CRIT-1/2, HIGH-3/5) → first resolution 9875f44 → **second hostile audit `methodology_audit_pass2.md` (methodology-review-pass2, ffb2af9): NO-GO, 2 CRIT / 4 HIGH / 6 MED / 4 LOW** → pass-2 resolution → **third hostile audit `methodology_audit_pass3.md` (methodology-review-pass3, a28168c): NO-GO, 1 CRIT / 0 HIGH / 5 MED / 6 LOW** → this revision. Pass-2 removed the authority-per-mechanic approach and defines every computed metric inline by formula. The pass-3 CRITICAL was self-inflicted: the pass-2 fix for the ECF double-count netted required reserve funding *into* the CFADS definition, which ranks reserves above debt service (backwards) and manufactures false covenant breaches. This revision **removes that term from CFADS** (CFADS is again cash available for debt service, net of maintenance capex only), moves required reserve funding to an explicit waterfall step below debt service, and states a single ordered waterfall. Per working principle #1, this resolved methodology must pass a fresh-session hostile re-audit (0 CRIT / 0 HIGH) BEFORE any analysis code is written.
 
 ## v0.x Scope Posture
 
@@ -40,8 +40,8 @@ waterfall-py v0.x is a **tight core**: a period-by-period mechanical debt-waterf
 - **Day-count default:** ACT/360 for US commercial bank loans — CRE senior and US project-finance bank debt alike. *(HIGH-3.)*
 - **Business-day convention (LOCKED):** **Modified Following**, default holiday calendar **U.S. Federal Reserve**. Applies to period-end and payment dates.
 - **Month-end (EOM) rule (LOCKED — pass-2 seam):** a loan originated on a month-end rolls all period-end dates to month-end (EOM convention on). Maturity dates adjust under Modified Following but never roll into a following month.
-- **SOFR fixing calendar (LOCKED — pass-2 seam):** SOFR/Term SOFR observations and fixings use the **SIFMA U.S. Government Securities Business Day calendar**, which is distinct from the U.S. Federal Reserve payment calendar. The engine keeps the two calendars separate: rate fixings on the SIFMA calendar, payment/period dates on the Fed calendar.
-- **Accrual vs. payment:** accrue daily, pay periodically; stub periods at close and final maturity pro-rata over the calendar-adjusted day count.
+- **SOFR fixing calendar (LOCKED — pass-2 seam):** SOFR/Term SOFR observations and fixings use the **SIFMA U.S. Government Securities Business Day calendar**, which is distinct from the U.S. Federal Reserve payment calendar. The engine keeps the two calendars separate: rate fixings **and their lookback/observation periods** on the SIFMA calendar, payment/period dates on the Fed calendar. Every computed date is assigned to exactly one calendar (pass-3 MED).
+- **Accrual vs. payment:** accrue daily, pay periodically; **accrual begins at `operations_start_date` (period 0), not at `deal_close_date`** (operations-only horizon — pass-3 MED). Stub periods are computed at operations start and at final maturity, pro-rata over the calendar-adjusted day count. `deal_close_date` is used only for the source/use tie-out at close, not for accrual.
 - **PIK behavior:** configurable per tranche; default **capitalize to principal at end of period**.
 
 ## Principal Amortization — LOCKED
@@ -66,8 +66,22 @@ waterfall-py v0.x is a **tight core**: a period-by-period mechanical debt-waterf
 - **IRA (LOCKED):** funded at close → opening reserve balance at period 0; released on stabilization trigger. No construction-period drawdown (operations-only horizon). *(MED-2.)*
 - **Sizing rules:** N months debt service (DSRA), N months interest (IRA), % revenue (MRA), schedule-based (capex), trigger-based (lease-up). Documented per type.
 - **Funding priority:** pre-funded at close vs. from operations vs. hybrid — default per reserve type.
-- **Required vs. discretionary:** "required/contractual" reserve funding is netted inside CFADS (see Cash Flow Source Assumptions); only **discretionary** reserve top-ups are deducted in the ECF sweep formula.
+- **Required vs. discretionary:** required/contractual reserve funding is an explicit waterfall step **below debt service and above the sweep** (see Waterfall Priority); it is deducted once in the ECF sweep base. It is **never** netted into CFADS. Discretionary reserve top-ups, if any, rank with permitted distributions.
 - **LC alternative:** `lc_funded=True` — no cash reserve, treated as "available" for shortfall.
+
+## Waterfall Priority (Single Ordered Sequence) — LOCKED
+
+Each operating period, available cash (CFADS) is applied in **one acyclic priority order** (resolves the pass-3 MED that the priority was never stated as a single sequence). This is the default; specific tranche seniority is configurable within these constraints, but the ordering is always a strict sequence with no cycles:
+
+1. **Senior fees and administrative expenses** (agency, trustee, servicing) not already in opex.
+2. **Senior debt service** — interest, then scheduled principal (pari-passu within the senior group, pro-rata by current balance). If CFADS is insufficient, **draw the DSRA** to cover the shortfall (Reserves).
+3. **Required reserve funding / replenishment** — DSRA back to required balance, then other required reserves. Ranks below debt service, above all subordinate uses.
+4. **Mezzanine / subordinate debt service** — interest, then scheduled principal.
+5. **Mandatory prepayments and ECF cash sweep** — event-triggered mandatory prepayments and the leverage-banded ECF sweep (ECF as defined in Cash Sweep Mechanics).
+6. **Permitted equity distributions** — blocked entirely under a covenant lock-up / cash-trap. Excluded SPV tax distributions, if supplied as inputs, are permitted here even during lock-up (Scope/MED-1).
+7. **Residual cash to equity.**
+
+The ordering is asserted acyclic and total: every dollar of CFADS is assigned to exactly one step, and no step depends on a later step. Default: senior reserve replenishment (step 3) ranks ahead of mezzanine debt service (step 4) — a senior-protective convention; configurable where a deal's ICA reverses it.
 
 ## Covenant Pack — LOCKED
 
@@ -80,15 +94,15 @@ waterfall-py v0.x is a **tight core**: a period-by-period mechanical debt-waterf
 - **Testing frequency:** quarterly / semi-annual / annual, annual averages where applicable; configurable per covenant. **No covenant is tested before period 0** (operations-only horizon).
 - **Covenant types:** maintenance / springing / incurrence.
 - **Three-tier cushion:** performance (minimum), trap (trigger — cash trap / sweep), default (acceleration). Configurable.
-- **Breach-output labeling (LOCKED, HIGH-2 + pass-2 terminology):** every breach signal, cash-trap activation, and default computation is emitted as a **"mechanical test result based on user-supplied inputs."** Output does not assert "event of default" or "acceleration available" as conclusions; it reports "test result: DSCR 0.82x below the 1.00x default threshold — acceleration is a contractual consequence the parties' documents assign to this result, not a determination by this engine." The disclaimer appears **adjacent to every breach flag**, not only in headers.
+- **Breach-output labeling (LOCKED, HIGH-2 + pass-2/pass-3 terminology):** every breach signal, cash-trap activation, and default computation is emitted as a **"mechanical test result computed by the engine from user-supplied CFADS and the deal terms."** (The engine computes debt service, so the label does not claim the result is purely user-supplied — pass-3 MED.) Output does not assert "event of default" or "acceleration available" as conclusions; it reports "test result: DSCR 0.82x below the 1.00x default threshold — acceleration is a contractual consequence the parties' documents assign to this result, not a determination by this engine." The disclaimer appears **adjacent to every breach flag**, not only in headers.
 
 ## Cash Sweep Mechanics — LOCKED
 
 - **Sweep types:** mandatory (ECF above thresholds), discretionary (borrower election), event-triggered (covenant breach).
 - **Leverage-banded step-downs:** e.g., 100% / 75% / 50% / 0% across configurable leverage bands.
 - **ECF definition — LOCKED (HIGH-1 + pass-2 reserve double-count):** single formula for both CRE and PF —
-  **ECF = CFADS − scheduled debt service − permitted distributions − permitted capex (growth/discretionary only) − discretionary reserve top-ups.**
-  CFADS is already net of maintenance capex AND required/contractual reserve funding (see Cash Flow Source Assumptions). Therefore the ECF formula deducts **only growth/discretionary capex** and **only discretionary reserve top-ups** — never maintenance capex and never required reserve funding, which would double-count. *(Resolves HIGH-1 and the pass-2 "− reserve funding double-count".)*
+  **ECF = CFADS − scheduled debt service − required reserve funding/replenishment − permitted distributions − permitted capex (growth/discretionary only).**
+  CFADS is net of maintenance capex only (see Cash Flow Source Assumptions), so the ECF formula deducts **growth/discretionary capex only** (never maintenance capex — that would double-count). Required reserve funding/replenishment is deducted here **once**, matching its position in the Waterfall Priority (below debt service, above the sweep). It is *not* in CFADS, so there is no double-count. *(Resolves HIGH-1 and the pass-2/pass-3 reserve-funding treatment.)*
 - **Exclusions from sweep:** permitted acquisitions, permitted distributions below leverage threshold, working-capital fluctuations. Configurable.
 - **Application order:** configurable (senior pro-rata / last-out-first).
 
@@ -108,7 +122,7 @@ waterfall-py v0.x is a **tight core**: a period-by-period mechanical debt-waterf
 
 ## Default and Remedies — LOCKED
 
-- **Default categories:** payment, covenant, cross-default, bankruptcy, judgment.
+- **Default categories (LOCKED — pass-3 MED):** **payment default and covenant default are engine-computed mechanical test results** (the engine has the cash flows and thresholds to test them). **Bankruptcy, cross-default, and judgment are external legal events the engine cannot determine — they are user-supplied event inputs**, and the engine only propagates their consequences (e.g., automatic acceleration flag) when supplied. Output never asserts that a bankruptcy/cross-default/judgment has occurred.
 - **Grace periods (default, configurable):** payment 5 business days, covenant 30 days, bankruptcy 0 days. "Business days" resolve on the U.S. Federal Reserve calendar under Modified Following.
 - **Post-default interest:** default-rate spread, default **+2.00%**, configurable.
 - **Acceleration / EoD:** the engine computes when contractual thresholds are crossed and **labels the result as a mechanical test result** (see Covenant Pack). It does not declare a legal event of default.
@@ -124,9 +138,9 @@ waterfall-py v0.x is a **tight core**: a period-by-period mechanical debt-waterf
 
 ## Cash Flow Source Assumptions — LOCKED
 
-- **CFADS is an INPUT.** **Canonical definition (LOCKED — resolves pass-2 CRE-CFADS gap + reserve double-count):** CFADS = cash available for debt service, computed **net of opex, cash taxes, maintenance capex, AND required/contractual reserve funding** — uniform across CRE and project finance:
-  - **Project finance:** revenues − opex − cash tax − maintenance capex − required reserve funding.
-  - **CRE:** NOI − maintenance capex − TI/LC − required reserve funding. (NOI is pre-capex; this definition nets it, so the ECF formula does not deduct capex again.)
+- **CFADS is an INPUT.** **Canonical definition (LOCKED — resolves pass-2 CRE-CFADS gap and the pass-3 CRITICAL):** CFADS = **cash available for debt service**, computed **net of opex, cash taxes, and maintenance capex only** — uniform across CRE and project finance. **Reserve funding is NOT netted into CFADS** — it is a use that ranks *below* debt service and is applied as an explicit waterfall step (see Waterfall Priority and Reserves). Netting reserves into CFADS would rank them above debt service and understate every coverage ratio (the pass-3 CRITICAL); it is prohibited.
+  - **Project finance:** revenues − opex − cash tax − maintenance capex.
+  - **CRE:** NOI − maintenance capex − TI/LC. (NOI is pre-capex; this nets maintenance capex once, so the ECF formula does not deduct maintenance capex again.)
 - **Sign convention (MED-5):** positive CFADS = cash available for debt service.
 - **Period dating (MED-5):** period-end. LLCR/PLCR/DSCR assume period-end CFADS.
 - **Negative CFADS (MED-5):** passed through as-is; the DSRA-draw mechanism (see Reserves) surfaces and absorbs the shortfall. The engine does not raise on negative CFADS.
