@@ -1,204 +1,220 @@
 # waterfall-py: Methodology
 
-> **STATUS: DECISIONS LOCKED — PENDING FRESH RE-AUDIT.** This document captures the design decisions that govern what waterfall-py computes and what it explicitly refuses to compute. The methodology skeleton (commit 53294fc) was hostile-audited (`methodology_audit.md`, `methodology-audit` branch: 2 CRIT / 5 HIGH / 6 MED / 5 LOW). CRIT-1, CRIT-2, HIGH-3, HIGH-5 were resolved mechanically in commit f87f689. This revision resolves the remaining HIGH, MEDIUM, and LOW findings and locks the v0.x scope. Per working principle #1, this resolved methodology must pass a fresh-session hostile re-audit (0 CRIT/HIGH) BEFORE any analysis code is written.
+> **STATUS: DECISIONS LOCKED (PASS-2 RESOLVED) — PENDING FRESH RE-AUDIT #2.** Lineage: skeleton (53294fc) → first hostile audit `methodology_audit.md` (2 CRIT / 5 HIGH / 6 MED / 5 LOW) → mechanical fixes f87f689 (CRIT-1/2, HIGH-3/5) → first resolution 9875f44 → **second hostile audit `methodology_audit_pass2.md` (methodology-review-pass2, ffb2af9): NO-GO, 2 CRIT / 4 HIGH / 6 MED / 4 LOW** → this revision. The pass-2 CRITICALs were self-inflicted: the prior "Citations — RESOLVED" section reintroduced the CRIT-2/HIGH-5 antipattern by asserting authorities (LSTA MCAP "June 2025", S&P "Project Finance Framework", MBA for underwriting) that fail external verification. This revision **removes the authority-per-mechanic approach entirely** and defines every computed metric inline by formula. Per working principle #1, this resolved methodology must pass a fresh-session hostile re-audit (0 CRIT / 0 HIGH) BEFORE any analysis code is written.
 
 ## v0.x Scope Posture
 
-waterfall-py v0.x is a **tight core**: a period-by-period mechanical debt-waterfall engine over a user-supplied CFADS stream and a capital stack of senior + mezzanine + residual equity. Ambitious skeleton features that add audit surface without serving the core are **explicitly scoped out of v0.x** (enumerated in Limitations) and revisited only after the core ships and settles (depth-over-breadth). Every "locked" decision below states the v0.x default and, where relevant, what is deferred.
+waterfall-py v0.x is a **tight core**: a period-by-period mechanical debt-waterfall engine over a user-supplied CFADS stream and a capital stack of senior + mezzanine + residual equity. Ambitious skeleton features that add audit surface without serving the core are **explicitly scoped out** (enumerated in Limitations) and revisited only after the core ships and settles (depth-over-breadth).
+
+**Modeling horizon (LOCKED — resolves pass-2 construction seam).** The engine models the **operating period only**. Period 0 is the **conversion / stabilization date**. Construction periods are not modeled: no construction-period balances, no interest accrual before period 0, no covenant testing before period 0. Reserves funded at close (DSRA, IRA) appear as **opening reserve balances at period 0**, not as construction-period drawdowns. This removes the collision between accrue-from-close, IRA-funded-at-close, and construction being out of scope that produced spurious defaults every construction period.
 
 ## Scope
 
 **In scope.**
-- Real estate debt waterfalls: CRE acquisition, bridge, permanent, refinance. Property types: multifamily, office, industrial, retail, hospitality, mixed-use.
-- Project finance debt waterfalls: infrastructure, renewables (wind/solar/storage), PPP/P3, mining, oil & gas. SPV-based, limited-recourse.
-- Period-by-period mechanical cash flow computation given a CFADS stream and a capital stack.
+- Real estate debt waterfalls: CRE acquisition, bridge, permanent, refinance (operating period). Property types: multifamily, office, industrial, retail, hospitality, mixed-use.
+- Project finance debt waterfalls (operating period): infrastructure, renewables (wind/solar/storage), PPP/P3, mining, oil & gas. SPV-based, limited-recourse.
+- Period-by-period mechanical cash flow computation given a CFADS stream and a capital stack, starting at operations.
 
 **Out of scope (explicitly stated, refuse on input).**
-- Tax credit equity waterfalls (LIHTC, NMTC, HTC, ITC partnership flips). Capital account maintenance, DRO/QIO, HLBV, recapture — not this tool. Use a separate tax-credit-equity tool.
-- **SPV tax distribution provisions** (phantom-income distributions to equity holders to cover tax on pass-through income in excess of distributions). These are SPV operating provisions, not tax-credit equity, but they are out of v0.x scope. If needed, they are treated as user-specified distribution inputs, not modeled. *(Resolves MED-1.)*
-- CMBS bond-level tranching (AAA/AA/A/.../unrated). This tool models loan-level waterfalls, not bond-pool waterfalls.
-- **A/B note structures.** B-piece is not a supported tranche type in v0.x. A/B-specific mechanics — interest-shortfall absorption (B before A), appraisal reduction amounts (ARA), sequential-vs-pro-rata loss allocation — are out of scope. The standard seniority queue must not be used to approximate an A/B deal. *(Resolves MED-3.)*
-- Construction-period modeling. Construction draw schedules are inputs only; the engine does not compute construction-period balances or interest-reserve drawdown during construction (see Reserves / MED-2 resolution).
-- Derivatives accounting and hedge effectiveness (ASC 815). Floating-rate inputs are modeled at the index reset; hedge cash flows are inputs, not modeled.
-- NOI projection (CRE) and CFADS projection. These are inputs to the engine, not outputs of it. Composing with separate projection tools is expected.
-- Credit judgment. Output is mechanical waterfall computation. Never produces "investable," "approvable," or "creditworthy" claims. Covenant-breach outputs are labeled as mechanical test results (see Language Guardrails / HIGH-2).
+- Tax credit equity waterfalls (LIHTC, NMTC, HTC, ITC partnership flips). Capital account maintenance, DRO/QIO, HLBV, recapture — not this tool.
+- **SPV tax distribution provisions** (phantom-income distributions to equity). Out of v0.x scope. If supplied as distribution inputs, they are treated as **permitted distributions that sit ahead of a covenant lock-up** (tax distributions are customarily carved out of lock-up restrictions); the engine does not model the phantom-income calculation. *(Resolves MED-1 + pass-2 tax-distribution/lock-up interaction.)*
+- CMBS bond-level tranching. Loan-level waterfalls only.
+- **A/B note structures / B-piece shortfall mechanics** (ARA, sequential-vs-pro-rata loss allocation, B-before-A shortfall absorption). The standard seniority queue must not approximate an A/B deal. *(MED-3.)*
+- **Construction-period modeling.** Draw schedules are inputs to the projection that produces CFADS; the engine's clock starts at operations (see Modeling horizon).
+- Derivatives accounting / hedge effectiveness (ASC 815). Floating-rate inputs modeled at index reset; hedge cash flows are inputs.
+- NOI / CFADS projection. Inputs to the engine, not outputs. Compose with a separate projection tool.
+- Credit judgment. Output is mechanical computation; covenant-breach outputs are mechanical test results, never credit determinations (see Language Guardrails).
 
 ## Capital Stack Architecture — LOCKED
 
-- **Supported tranche types (v0.x):** senior secured facilities (Term A, Term B, revolver, delayed-draw, accordion), mezzanine, common equity (residual). **Deferred:** B-piece, preferred equity (quasi-debt with stated yield). Rationale: B-piece pulls in A/B mechanics (out of scope, MED-3); preferred-equity promote/quasi-debt mechanics widen the surface without serving the core debt waterfall.
-- **Seniority handling:** configurable priority queue with pari-passu groups; within a group, allocate pro-rata by current balance. (Verified CLEAN-equivalent market convention.)
-- **Intercreditor assumptions:** default ICA assumptions documented per tranche type (standstill periods, payment-blockage rights), overrideable. Purchase options deferred.
-- **Multi-currency:** OUT for v0.x. Single-currency only; currency code carried in metadata for downstream consumers.
+- **Supported tranche types (v0.x):** senior secured facilities (Term A, Term B, revolver, delayed-draw, accordion), mezzanine, common equity (residual). **Deferred:** B-piece (pulls in A/B mechanics), preferred equity (quasi-debt promote widens surface without serving the core).
+- **Seniority handling:** configurable priority queue with pari-passu groups; within a group, allocate pro-rata by current balance.
+- **Intercreditor assumptions:** default ICA assumptions per tranche type (standstill periods, payment-blockage rights), overrideable. Purchase options deferred.
+- **Multi-currency:** OUT for v0.x. Single-currency; currency code in metadata.
 
 ## Interest Mechanics — LOCKED
 
-- **Rate types:** fixed, floating (index + spread, with caps/floors), step-up, PIK (toggle per period), default-rate accrual.
-- **Floating-rate indices:** SOFR, Term SOFR (1M/3M/6M). EURIBOR/other deferred with multi-currency. Index reset default **in advance**; lookback days configurable.
-- **Day-count conventions (v0.x):** 30/360, ACT/360, ACT/365 (Fixed). **ACT/ACT is dropped from v0.x** — it is rare in loan computations and its ISDA/ICMA/AFB variants diverge on leap-year treatment; ACT/365(Fixed) covers the use cases. If ACT/ACT is ever added, the ISDA variant must be named explicitly. *(Resolves LOW-4.)*
-- **Day-count default:** ACT/360 for US commercial bank loans — both CRE senior and US project-finance bank debt. (30/360 is a residential-mortgage / bond convention and is not the project-finance default.) *(HIGH-3, already applied in f87f689; retained here.)*
-- **Business-day convention (LOCKED):** **Modified Following** is the v0.x default. **Holiday calendar:** **U.S. Federal Reserve** calendar is the v0.x default. A period-end date landing on a weekend or U.S. bank holiday is adjusted under Modified Following; grace periods stated in "business days" resolve against this calendar. Multi-currency / multi-calendar support is deferred with multi-currency. *(Resolves HIGH-4.)*
-- **Accrual vs. payment timing:** accrue daily, pay periodically. Stub periods at close and final maturity computed pro-rata over the actual (calendar-adjusted) day count.
+- **Rate types:** fixed, floating (index + spread, caps/floors), step-up, PIK (toggle per period), default-rate accrual.
+- **Floating indices:** SOFR, Term SOFR (1M/3M/6M). Reset default **in advance**; lookback days configurable. EURIBOR/other deferred with multi-currency.
+- **Day-count (v0.x):** 30/360, ACT/360, ACT/365 (Fixed). **ACT/ACT dropped** — rare in loans; ISDA/ICMA/AFB variants diverge on leap years; ACT/365F covers the cases. *(LOW-4.)*
+- **Day-count default:** ACT/360 for US commercial bank loans — CRE senior and US project-finance bank debt alike. *(HIGH-3.)*
+- **Business-day convention (LOCKED):** **Modified Following**, default holiday calendar **U.S. Federal Reserve**. Applies to period-end and payment dates.
+- **Month-end (EOM) rule (LOCKED — pass-2 seam):** a loan originated on a month-end rolls all period-end dates to month-end (EOM convention on). Maturity dates adjust under Modified Following but never roll into a following month.
+- **SOFR fixing calendar (LOCKED — pass-2 seam):** SOFR/Term SOFR observations and fixings use the **SIFMA U.S. Government Securities Business Day calendar**, which is distinct from the U.S. Federal Reserve payment calendar. The engine keeps the two calendars separate: rate fixings on the SIFMA calendar, payment/period dates on the Fed calendar.
+- **Accrual vs. payment:** accrue daily, pay periodically; stub periods at close and final maturity pro-rata over the calendar-adjusted day count.
 - **PIK behavior:** configurable per tranche; default **capitalize to principal at end of period**.
 
 ## Principal Amortization — LOCKED
 
-- **Schedule types (v0.x):** bullet, fully-amortizing, balloon (partial amort then balloon), mortgage-style ("30-due-in-10": constant payment on a longer amort period than term), interest-only periods, custom (user-supplied schedule). **Deferred:** sculpted (project-finance back-loaded, sculpted-to-DSCR) — it requires an iterative solver (the approach whose bogus Greene citation was removed in CRIT-1) and is deferred to a later version; when built, the numerical solve (Newton-Raphson / goal-seek) is documented inline in code, not against an econometrics citation.
-- **Amortization basis:** straight-line, mortgage-constant. Sculpted-to-DSCR deferred (see above).
-- **Recompute behavior on prepayment:** configurable; default **re-amortize** remaining balance over remaining term.
+- **Schedule types (v0.x):** bullet, fully-amortizing, balloon, mortgage-style ("30-due-in-10"), interest-only periods, custom (user-supplied). **Deferred:** sculpted / sculpted-to-DSCR (requires an iterative solver — the approach whose bogus Greene citation was removed in CRIT-1; when built, the Newton-Raphson / goal-seek solve is documented inline in code).
+- **Amortization basis:** straight-line, mortgage-constant. Sculpted-to-DSCR deferred.
+- **Recompute on prepayment:** configurable; default **re-amortize** over remaining term.
 
 ## Fee Modeling — LOCKED
 
-- **Fee types (v0.x):** arrangement (upfront, % of commitment), commitment/unused-line (periodic, % of undrawn), exit (% of repaid balance), prepayment penalty (declining schedule or make-whole), agency, legal-cost passthrough. **Deferred:** Original Issue Discount (OID). OID amortizes over loan life into yield and requires yield-to-maturity treatment distinct from cash fees; it is out of v0.x scope. All v0.x fees are treated as cash outflows on their funding/payment date. *(Resolves LOW-5.)*
-- **Treatment:** cash outflows on the closing/payment date; not netted against interest. Shown separately in waterfall output.
-- **Accrual basis for periodic fees:** same day-count as the tranche unless a fee-specific basis is supplied.
+- **Fee types (v0.x):** arrangement, commitment/unused-line, exit, prepayment penalty (declining schedule or make-whole), agency, legal-cost passthrough. **Deferred:** OID (amortizes into yield, needs YTM treatment). All v0.x fees are cash outflows on their funding/payment date. *(LOW-5.)*
+- **Treatment:** cash outflows on the date, not netted against interest; shown separately.
+- **Periodic fee accrual basis:** same day-count as the tranche unless a fee-specific basis is supplied.
 
 ## Reserves — LOCKED
 
-- **Reserve types:** DSRA (debt service reserve), IRA (interest reserve), MRA (maintenance reserve), capex reserve, lease-up reserve, TI/LC reserve.
-- **IRA scope (LOCKED):** IRA is **funded at close and released on a stabilization trigger**. The engine does **not** compute construction-period IRA drawdown — that would be construction-period modeling, which is out of scope. Draw schedules remain inputs-only. This removes the skeleton's scope contradiction (Scope said construction is inputs-only; Reserves implied the engine draws the IRA down over construction). *(Resolves MED-2.)*
-- **Sizing rules:** N months of debt service (DSRA), N months of interest (IRA), % of revenue (MRA), schedule-based (capex), trigger-based (lease-up). Each reserve has its own funding and release rules, documented per type.
-- **Funding priority:** pre-funded at close vs. funded from operations vs. hybrid — default documented per reserve type.
-- **Release rules:** DSRA at maturity; IRA on stabilization trigger; capex per schedule.
-- **LC alternative:** `lc_funded=True` flag — no cash reserve, but reserve treated as "available" for shortfall purposes.
+- **Reserve types:** DSRA, IRA, MRA, capex, lease-up, TI/LC.
+- **DSRA draw / replenish / release (LOCKED — resolves pass-2 "inert DSRA"):**
+  - **Draw:** when period CFADS is insufficient to cover scheduled debt service, the DSRA is drawn to cover the shortfall (down to zero). This is the mechanism by which negative or sub-debt-service CFADS (MED-5 pass-through) is absorbed rather than silently ignored.
+  - **Replenish:** the DSRA is topped back up to its required balance from subsequent surplus CFADS, **ahead of any equity distribution and ahead of discretionary sweep application**, and behind scheduled senior debt service.
+  - **Release:** remaining balance released at final maturity (or per a documented trigger).
+- **IRA (LOCKED):** funded at close → opening reserve balance at period 0; released on stabilization trigger. No construction-period drawdown (operations-only horizon). *(MED-2.)*
+- **Sizing rules:** N months debt service (DSRA), N months interest (IRA), % revenue (MRA), schedule-based (capex), trigger-based (lease-up). Documented per type.
+- **Funding priority:** pre-funded at close vs. from operations vs. hybrid — default per reserve type.
+- **Required vs. discretionary:** "required/contractual" reserve funding is netted inside CFADS (see Cash Flow Source Assumptions); only **discretionary** reserve top-ups are deducted in the ECF sweep formula.
+- **LC alternative:** `lc_funded=True` — no cash reserve, treated as "available" for shortfall.
 
 ## Covenant Pack — LOCKED
 
-- **Ratios:** DSCR (trailing / forward-looking, average vs. minimum), LTV, debt yield, LLCR (loan-life coverage), PLCR (project-life coverage), Debt/EBITDA, fixed-charge coverage, interest coverage.
-- **Testing frequency:** quarterly / semi-annual / annual, with annual averages where applicable. Configurable per covenant.
-- **Covenant types:** maintenance (tested every period), springing (tested on action), incurrence-only.
-- **Cushion levels — three-tier:** performance (minimum), trap (trigger — cash trap / sweep activation), default (acceleration). Configurable.
-- **Breach consequences:** lock-up (no equity distributions), cash trap (sweep activated), springing activation, event of default. Configurable.
-- **Breach-output labeling (LOCKED, HIGH-2):** Every covenant-breach signal, cash-trap activation, and event-of-default computation is labeled **"mechanical test result based on user-supplied inputs."** The standard disclaimer appears **adjacent to every breach flag in the output**, not only in summary headers. Breach outputs are numeric test results, not credit determinations, and the output must make that explicit at the point of each flag. *(Resolves HIGH-2.)*
+- **Ratios and their inline definitions (no external authority; arithmetic is self-defining):**
+  - **DSCR** = CFADS ÷ scheduled debt service, per period. Trailing / forward-looking and average-vs-minimum are configurable.
+  - **LLCR** = PV(CFADS from the test date to **loan maturity**, discounted at the senior debt cost) ÷ current senior debt balance. DSRA balance may be added to the numerator (configurable; default excluded). *(Resolves pass-2 LLCR discount-rate/horizon gap.)*
+  - **PLCR** = PV(CFADS from the test date to **end of project life**, discounted at the senior debt cost) ÷ current debt balance. Horizon extends beyond loan maturity to the project/asset/concession life.
+  - Discount rate for LLCR/PLCR = the weighted senior debt cost, configurable and disclosed in the audit log.
+  - LTV, debt yield, Debt/EBITDA, fixed-charge coverage, interest coverage — each defined inline by formula at implementation.
+- **Testing frequency:** quarterly / semi-annual / annual, annual averages where applicable; configurable per covenant. **No covenant is tested before period 0** (operations-only horizon).
+- **Covenant types:** maintenance / springing / incurrence.
+- **Three-tier cushion:** performance (minimum), trap (trigger — cash trap / sweep), default (acceleration). Configurable.
+- **Breach-output labeling (LOCKED, HIGH-2 + pass-2 terminology):** every breach signal, cash-trap activation, and default computation is emitted as a **"mechanical test result based on user-supplied inputs."** Output does not assert "event of default" or "acceleration available" as conclusions; it reports "test result: DSCR 0.82x below the 1.00x default threshold — acceleration is a contractual consequence the parties' documents assign to this result, not a determination by this engine." The disclaimer appears **adjacent to every breach flag**, not only in headers.
 
 ## Cash Sweep Mechanics — LOCKED
 
-- **Sweep types:** mandatory (excess cash flow above thresholds), discretionary (borrower election), event-triggered (covenant breach activates).
-- **Leverage-banded step-downs:** e.g., 100% sweep above X leverage, 75% between X and Y, 50% between Y and Z, 0% below Z. Bands configurable per deal. (Verified CLEAN.)
-- **ECF (excess cash flow) definition — LOCKED (HIGH-1):** single formula —
-  **ECF = CFADS − debt service − permitted distributions − permitted capex (growth/discretionary only) − reserve funding.**
-  "Permitted capex" in this formula means **growth/discretionary capex only**. The CFADS input is defined (see Cash Flow Source Assumptions) as already net of **maintenance capex**; the ECF formula must **not** deduct maintenance capex a second time. The input preparer is responsible for supplying CFADS net of maintenance capex and for classifying only growth/discretionary capex into the ECF deduction. This single formula serves both CRE and project-finance contexts without double-counting. *(Resolves HIGH-1.)*
+- **Sweep types:** mandatory (ECF above thresholds), discretionary (borrower election), event-triggered (covenant breach).
+- **Leverage-banded step-downs:** e.g., 100% / 75% / 50% / 0% across configurable leverage bands.
+- **ECF definition — LOCKED (HIGH-1 + pass-2 reserve double-count):** single formula for both CRE and PF —
+  **ECF = CFADS − scheduled debt service − permitted distributions − permitted capex (growth/discretionary only) − discretionary reserve top-ups.**
+  CFADS is already net of maintenance capex AND required/contractual reserve funding (see Cash Flow Source Assumptions). Therefore the ECF formula deducts **only growth/discretionary capex** and **only discretionary reserve top-ups** — never maintenance capex and never required reserve funding, which would double-count. *(Resolves HIGH-1 and the pass-2 "− reserve funding double-count".)*
 - **Exclusions from sweep:** permitted acquisitions, permitted distributions below leverage threshold, working-capital fluctuations. Configurable.
-- **Sweep application order:** configurable (senior pro-rata / last-out-first).
+- **Application order:** configurable (senior pro-rata / last-out-first).
 
 ## Cure Rights — LOCKED
 
-- **Equity cure mechanics:** deemed EBITDA boost vs. cash injection for debt service (configurable). (Verified CLEAN.)
-- **Caps:** size cap per cure ($X or % of EBITDA), frequency cap (N cures per 12 months / over loan life), max consecutive cures.
-- **Overcure:** configurable — excess cure proceeds count against next period's covenant or are returned.
+- **Equity cure:** deemed EBITDA boost vs. cash injection (configurable).
+- **Caps:** size cap ($X or % EBITDA), frequency cap (N per 12 months / over life), max consecutive cures.
+- **Overcure:** configurable (counts against next period vs. returned).
 - **Mulligan:** configurable flag, default **off**.
 
 ## Mandatory Prepayments — LOCKED
 
-- **Triggers:** ECF sweep (above), asset-sale proceeds, insurance/condemnation proceeds, debt incurrence, change of control, equity issuance.
-- **Reinvestment rights:** window to reinvest proceeds before sweep applies (typical 12–18 months). Configurable per trigger.
+- **Triggers:** ECF sweep, asset-sale proceeds, insurance/condemnation, debt incurrence, change of control, equity issuance.
+- **Reinvestment rights:** configurable window (typical 12–18 months) per trigger.
 - **Application order:** senior pro-rata to scheduled amort, then next maturity, then revolver. Configurable.
-- **Premium:** mandatory prepayments carry **no premium** by default (optional prepayments may carry call protection — see Call Protection).
+- **Premium:** none by default (optional prepayments may carry call protection).
 
 ## Default and Remedies — LOCKED
 
 - **Default categories:** payment, covenant, cross-default, bankruptcy, judgment.
-- **Grace periods (default, configurable):** payment 5 business days, covenant 30 days, bankruptcy 0 days. "Business days" resolve against the U.S. Federal Reserve calendar under Modified Following (HIGH-4).
-- **Post-default interest:** default-rate spread, default **+2.00%** over stated rate, configurable.
-- **Acceleration:** optional on covenant default, automatic on bankruptcy.
-- **Intercreditor standstill:** senior gets N days/months of exclusive enforcement before mezz can act; default per ICA conventions.
+- **Grace periods (default, configurable):** payment 5 business days, covenant 30 days, bankruptcy 0 days. "Business days" resolve on the U.S. Federal Reserve calendar under Modified Following.
+- **Post-default interest:** default-rate spread, default **+2.00%**, configurable.
+- **Acceleration / EoD:** the engine computes when contractual thresholds are crossed and **labels the result as a mechanical test result** (see Covenant Pack). It does not declare a legal event of default.
+- **Intercreditor standstill:** senior exclusive-enforcement window before mezz can act; default per ICA.
 
 ## Call Protection — LOCKED
 
-- **Non-call period:** hard NC for N years from close (configurable).
+- **Non-call period:** hard NC for N years (configurable).
 - **Declining call schedule:** e.g., NC-2, 102, 101, par (configurable per tranche).
-- **Make-whole computation:** discount of remaining scheduled cash flows to a comparable-treasury reference. **Spread levels are configurable with no default** — T+50 / T+25 are market approximations, not published conventions, and are not hard-coded as defaults; they vary by credit, vintage, and lender. The discount-rate construction and computation are documented; the spread is a required input when make-whole is used. *(Resolves LOW-1.)*
-- **Yield maintenance vs. defeasance:** **yield maintenance only in v0.x.** Defeasance (CMBS-specific) deferred.
-- **Par-call windows:** typical last 3–6 months at par before maturity, configurable.
+- **Make-whole:** discount of remaining scheduled cash flows to a comparable-treasury reference. **Spread is a required input with no default** — T+50 / T+25 are market approximations, not published conventions, and are not hard-coded. *(LOW-1.)*
+- **Yield maintenance only** in v0.x; defeasance deferred.
+- **Par-call windows:** configurable (typical last 3–6 months at par).
 
 ## Cash Flow Source Assumptions — LOCKED
 
-- **CFADS is an INPUT**, not computed by this tool. The engine consumes a period-by-period CFADS stream. For project finance, CFADS = revenues − opex − tax − **maintenance capex** (maintenance capex is netted here, which is why the ECF formula deducts growth/discretionary capex only — see HIGH-1).
-- **CFADS sign convention (LOCKED, MED-5):** positive CFADS = **cash available for debt service** (inflow). 
-- **Period dating (LOCKED, MED-5):** cash flows are dated at **period end**. LLCR/PLCR and DSCR computations assume period-end CFADS. (Mid-period dating deferred; if added, it becomes an explicit configurable convention.)
-- **Negative CFADS handling (LOCKED, MED-5):** negative CFADS is **passed through as-is** so the debt-service-coverage/shortfall computation surfaces the shortfall. The engine does **not** raise an error on negative CFADS (stress scenarios routinely produce it).
-- **Construction draw schedules:** inputs only. No construction-period modeling (consistent with MED-2).
-- **Stress scenarios:** the engine accepts a list of CFADS streams (base, downside, severe) and runs the waterfall on each. Stress generation itself is not the engine's job.
+- **CFADS is an INPUT.** **Canonical definition (LOCKED — resolves pass-2 CRE-CFADS gap + reserve double-count):** CFADS = cash available for debt service, computed **net of opex, cash taxes, maintenance capex, AND required/contractual reserve funding** — uniform across CRE and project finance:
+  - **Project finance:** revenues − opex − cash tax − maintenance capex − required reserve funding.
+  - **CRE:** NOI − maintenance capex − TI/LC − required reserve funding. (NOI is pre-capex; this definition nets it, so the ECF formula does not deduct capex again.)
+- **Sign convention (MED-5):** positive CFADS = cash available for debt service.
+- **Period dating (MED-5):** period-end. LLCR/PLCR/DSCR assume period-end CFADS.
+- **Negative CFADS (MED-5):** passed through as-is; the DSRA-draw mechanism (see Reserves) surfaces and absorbs the shortfall. The engine does not raise on negative CFADS.
+- **Capex and reserve classification is an INPUT-PREPARER responsibility (LOCKED — resolves pass-2 capex-boundary MED):** the maintenance-vs-growth capex split and the required-vs-discretionary reserve split are supplied by the input preparer. The engine **cannot verify** these classifications — its audit assertions verify arithmetic (principal trace, interest reconciliation, source/use tie-out), not the economic classification of an input. This is documented as an explicit limitation.
+- **Construction draw schedules:** inputs to the upstream projection only; the engine starts at operations.
+- **Stress scenarios:** engine accepts a list of CFADS streams (base / downside / severe) and runs the waterfall on each. Stress generation is not the engine's job.
 
 ## Required vs. Optional Parameters — LOCKED
 
-- **Required (raise `InvalidInputError` on omission):** `deal_close_date`, `period_frequency` (M/Q/SA/A), `tranches` list, `cfads_stream`.
+- **Required (raise `InvalidInputError`):** `deal_close_date`, `operations_start_date` (period 0), `period_frequency` (M/Q/SA/A), `tranches`, `cfads_stream`.
 - **Required with validation:** `data_currency` (ISO 4217), `reporting_basis` (calendar / fiscal).
-- **Optional with documented defaults:** `day_count` (per tranche-type default), `business_day_convention` (default Modified Following), `holiday_calendar` (default U.S. Federal Reserve), reserve sizing (per reserve-type default), covenant levels (none by default — explicit only).
-- All optional defaults documented inline in code AND in this methodology (single source of truth).
+- **Optional with documented defaults:** `day_count` (per tranche-type default), `business_day_convention` (Modified Following), `payment_calendar` (U.S. Federal Reserve), `sofr_calendar` (SIFMA US Government Securities), reserve sizing (per type), covenant levels (none by default — explicit only).
+- All optional defaults documented inline in code AND here (single source of truth).
 
 ## Validation Tests (Built-In) — LOCKED
 
-These audit assertions are the **primary defensibility mechanism for numeric output** (see MED-6 resolution in Language Guardrails). They are not optional niceties:
-
-- **Source/use tie-out at close:** sum of sources = sum of uses; raise `SourceUseImbalanceError` if mismatch above tolerance.
-- **Principal trace:** opening balance + draws − scheduled amort − prepayments − sweeps = closing balance, per tranche per period. Asserted every period.
+These audit assertions are the **primary defensibility mechanism for numeric output**:
+- **Source/use tie-out at close:** sum of sources = sum of uses; `SourceUseImbalanceError` above tolerance.
+- **Principal trace:** opening + draws − scheduled amort − prepayments − sweeps = closing, per tranche per period. Asserted every period.
 - **Interest accrual reconciliation:** rate × average balance × day-count fraction = period interest, within tolerance.
+- **Reserve roll-forward:** opening reserve + funding − draws + replenishment = closing, per reserve per period (covers the new DSRA draw/replenish logic).
 - **DSCR audit table:** CFADS, debt service, DSCR per period, arithmetic auditable.
 - **Capital account roll-forward (equity residual):** contributions − distributions = ending balance.
-- All assertions raise typed exceptions, never silently swallow (matches fair-lending-screener `InsufficientDataError`-style hierarchy).
+- All assertions raise typed exceptions, never silently swallow.
 
 ## Output Schema — LOCKED
 
 - **Primary outputs:** period table (DataFrame), tranche-level summary, covenant status table, source/use statement, audit log.
-- **Period table columns:** `period_index`, `period_end_date`, `cfads`, `debt_service_by_tranche`, `principal_by_tranche`, `interest_by_tranche`, `reserves`, `sweep_amount`, `equity_distribution`, `covenant_status`, `dscr`.
-- **Audit log:** every decision the engine makes per period (sweep triggered, covenant breached, cure applied) with rationale and the "mechanical test result" label on breach entries.
-- **Export formats:** native DataFrame, Excel via openpyxl (formatted), JSON for API consumers.
+- **Period table columns:** `period_index`, `period_end_date`, `cfads`, `debt_service_by_tranche`, `principal_by_tranche`, `interest_by_tranche`, `reserve_balances`, `reserve_draws`, `sweep_amount`, `equity_distribution`, `covenant_status`, `dscr`.
+- **Audit log:** every per-period decision (sweep triggered, DSRA drawn/replenished, covenant test result, cure applied) with rationale, discount rate used for LLCR/PLCR, and the "mechanical test result" label on breach entries.
+- **Export formats:** DataFrame, Excel (openpyxl), JSON.
 
 ## Language Guardrails (Strictly Enforced) — LOCKED
 
-- Output never produces credit judgments. No "investable," "approvable," "creditworthy," "recommended."
-- Output never produces forward-looking statements not grounded in input. If CFADS is a projection, output labels results as projections.
+- No credit judgments ("investable," "approvable," "creditworthy," "recommended").
+- No forward-looking statements not grounded in input; projection inputs yield outputs labeled as projections.
 - **Standard disclaimer:** "Mechanical waterfall computation only. Not a credit recommendation. CFADS inputs are user-supplied projections, not modeled cash flows."
-- **Two-layer defensibility (LOCKED, HIGH-2 + MED-6):**
-  1. **Language layer** — the three-location disclaimer pattern from fair-lending-screener (report rendering, `DealResult.limitations`, `DealResult.interpretation` if added) with a through-function regression test. This protects against the "no credit judgment" language risk. Additionally, per HIGH-2, breach signals carry the "mechanical test result based on user-supplied inputs" label **adjacent to each flag**.
-  2. **Numeric layer (primary)** — the audit-assertion pattern (Validation Tests) is the primary defensibility mechanism for numeric output misuse: the principal trace, interest-accrual reconciliation, source/use tie-out, and the period-by-period audit log let a reviewer verify the numbers are internally correct. A disclaimer does not make a wrong number defensible; the audit trail does. The disclaimer and the audit trail are complementary, not substitutes. *(Resolves MED-6.)*
+- **No legal conclusions in output (LOCKED — pass-2):** breach and default results are reported as mechanical test results, never as "event of default," "acceleration available," or equivalent legal conclusions stated as fact (see Covenant Pack / Default and Remedies).
+- **Two-layer defensibility (HIGH-2 + MED-6):**
+  1. **Language layer** — three-location disclaimer (report rendering, `DealResult.limitations`, `DealResult.interpretation` if added) with a through-function regression test; plus the mechanical-test-result label adjacent to every breach flag.
+  2. **Numeric layer (primary)** — the audit-assertion pattern (Validation Tests) is the primary defensibility mechanism: principal trace, interest reconciliation, reserve roll-forward, source/use tie-out, and the audit log let a reviewer verify the numbers are internally correct. A disclaimer does not make a wrong number defensible; the audit trail does.
 
 ## Limitations (Documented in 3+ Places: methodology.md, DealResult.limitations, every report, _limitations_doc.md) — LOCKED
 
 - No NOI / CFADS projection modeling
-- No construction-period modeling (draw schedules and IRA drawdown during construction are out of scope; IRA is funded at close and released on stabilization)
-- No tax modeling (corporate, withholding, partnership); no SPV tax-distribution provisions
+- No construction-period modeling; the engine's clock starts at operations/stabilization (period 0)
+- **Engine does not verify capex classification (maintenance vs. growth) or reserve classification (required vs. discretionary) — these are input-preparer responsibilities**
+- No tax modeling; no SPV tax-distribution (phantom-income) modeling
 - No derivatives / hedge accounting
-- No equity promote / carried interest (this is a debt waterfall — equity is residual only)
+- No equity promote / carried interest (debt waterfall; equity is residual only)
 - No CMBS bond-level tranching
 - No A/B note structures or B-piece shortfall mechanics
 - No preferred-equity / quasi-debt tranche
 - No tax credit equity flips
 - No defeasance (yield maintenance only)
-- No OID modeling (all fees are cash outflows on funding date)
+- No OID modeling
 - No sculpted-to-DSCR amortization (deferred — requires iterative solver)
 - No ACT/ACT day-count (30/360, ACT/360, ACT/365F only)
 - Single-currency only
 
-## Citations — RESOLVED / VERIFY-AT-RE-AUDIT
+## Definitional Basis (No External Authority) — LOCKED
 
-Citation discipline (learned from CRIT-2 / HIGH-5): **never cite a bond/pool-level source for loan-level behavior**, and pin every citation to an edition/section. Any citation not yet pinned is marked VERIFY-NEEDED and must be resolved (pinned or dropped) at the re-audit before code.
-
-- **LSTA (Loan Syndications and Trading Association) — Model Credit Agreement Provisions (MCAP), June 2025 edition** — ECF definitions, cure rights. *(Pins LOW-3; the June 2025 edition was the most recent as of the audit — confirm edition/section at re-audit.)*
-- **S&P Global Ratings — Project Finance Framework** — LLCR/PLCR and DSCR sizing conventions (loan-level, project-finance). Primary source for DSCR conventions, replacing the World Bank PPP Reference Guide as the DSCR authority. *(Resolves MED-4: World Bank PPP Guide is a procurement/policy document, not a lender-practice DSCR source; dropped as the DSCR authority. Confirm S&P PF criteria section at re-audit.)*
-- **MBA (Mortgage Bankers Association) Commercial/Multifamily origination conventions** — CRE underwriting-standards reference, replacing ULI/NAIOP for underwriting conventions. ULI/NAIOP are best-practice/research bodies, not primary underwriting authorities; cite them only for property-type data if used, never for underwriting conventions. *(Resolves LOW-2.)*
-- **REMOVED in f87f689 (do not reintroduce):** Greene §17.x (wrong — Ch. 17 is discrete choice, not numerical methods; and an econometrics text has no PF sculpted-amort content), "SIFMA CMBS Investor Reporting Package" (misattributed — the IRP is CREFC, not SIFMA; and it is a reporting standard, not a covenant-testing methodology), Moody's CMBS Surveillance criteria (bond/pool-level, not loan-level covenant testing). *(CRIT-1, CRIT-2, HIGH-5.)*
+After two audit rounds in which asserted external authorities failed verification, the methodology **does not attribute its mechanics to published standards.** Instead:
+- Every computed metric (DSCR, LLCR, PLCR, ECF, LTV, debt yield) is **defined inline by its formula** — arithmetic definitions are self-defensible and require no citation.
+- Market conventions (leverage-banded sweep step-downs, cure caps, default-rate spread, grace periods) are described **as common market conventions**, with configurable values and no claim to a specific published standard.
+- **Removed and not to be reintroduced** (each failed external verification): Greene §17.x (Ch. 17 is discrete-choice econometrics, not numerical methods); "SIFMA CMBS Investor Reporting Package" (the IRP is CREFC, and is a reporting standard, not covenant methodology); Moody's CMBS Surveillance criteria (bond/pool-level, not loan-level); "LSTA MCAP June 2025 edition" (no such final edition; the MCAPs are syndicated-corporate boilerplate that deliberately exclude ECF/cure/covenant terms); "S&P Project Finance Framework" (misnamed/retired; S&P criteria are DSCR-centric and do not define LLCR/PLCR; an issue-rating source, not loan-level); MBA "underwriting standards" (MBA publishes origination volume statistics, not underwriting standards, and the engine performs no underwriting).
+- **General reference (non-load-bearing, not relied on for correctness):** E. R. Yescombe, *Principles of Project Finance* — standard practitioner treatment of LLCR/PLCR. Listed as further reading only; the engine's LLCR/PLCR correctness rests on the inline formulas above, not on this text.
 
 ## Release Process — LOCKED
 
-- CI-driven publish (working principle #8): `release.yml` with verify-version → build → test-wheel → publish pipeline.
+- CI-driven publish (working principle #8): `release.yml` verify-version → build → test-wheel → publish.
 - OIDC Trusted Publisher configured BEFORE first CI publish. No local-tree publishes.
 - Version-guard via tomllib, Python 3.11+ in publish step. All actions SHA-pinned.
-- Dual-import shim from day 1: `waterfall_py` and `waterfallpy` both resolve to the same package (working principle #6).
-- CHANGELOG from day 1 (working principle #7).
-- Methodology doc bundled in wheel via importlib.resources (pattern from fair-lending-screener v0.2.0).
+- Dual-import shim: `waterfall_py` and `waterfallpy` resolve to the same package (WP #6).
+- CHANGELOG from day 1 (WP #7).
+- Methodology bundled in wheel via importlib.resources (fair-lending-screener v0.2.0 pattern).
 
 ## Audit Discipline (For Reference)
 
-This tool sits in a defensible-output category: a counterparty's lawyer might read its output in litigation over a deal. Apply the fair-lending-screener audit pattern:
-- Self-audit before publish (working principle #3)
-- Hostile second-pass audit in a fresh session (working principle #4) — **this resolved methodology must pass a 0-CRIT/0-HIGH re-audit before code is written**
+Defensible-output category (a counterparty's lawyer might read output in litigation). Apply the fair-lending-screener pattern:
+- Self-audit before publish (WP #3)
+- Hostile second-pass audit in a fresh session (WP #4) — **this resolved methodology must pass a 0-CRIT/0-HIGH re-audit before code is written**
 - Through-function regression tests for every guardrail
-- No "this test exists" assumption — verify the test actually runs and asserts on the right thing
+- No "this test exists" assumption — verify the test runs and asserts on the right thing
 
 ---
 
 **Next steps:**
-1. Fresh-session hostile re-audit of THIS resolved methodology (must confirm 0 CRIT / 0 HIGH; verify the two VERIFY-NEEDED citations are pinned or dropped).
+1. Fresh-session hostile re-audit #2 of THIS resolved methodology (must confirm 0 CRIT / 0 HIGH; confirm no external authority claim remains and the inline definitions are internally consistent).
 2. On re-audit GO, scope the v0.x feature set into a build plan against the locked decisions.
-3. THEN write code against the locked methodology (negative-case-first tests, principal-trace / audit-assertion discipline).
+3. THEN write code against the locked methodology (negative-case-first tests, principal-trace / reserve-roll-forward / audit-assertion discipline).
