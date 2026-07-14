@@ -51,13 +51,11 @@ def run(deal: Deal) -> DealResult:
         return getattr(deal, name) or [0.0] * n
 
     equity_in = series("equity_contributions")
-    facility_in = series("facility_draws")
     proceeds_in = series("event_proceeds")
-
-    facility_state = next((s for s in debt_states if s.tranche.is_facility), None)
-    if any(x > 0 for x in facility_in) and facility_state is None:
-        from waterfall.data.exceptions import InvalidInputError
-        raise InvalidInputError("facility_draws supplied but no tranche has is_facility=True")
+    # Facilities are funded at close only in v0.x — the opening balance is the funded
+    # amount. Mid-life facility draws are deferred to v0.1 and rejected at input
+    # validation (schema UnsupportedFeatureError), so there is no facility-draw path
+    # here and drawn cash can never reach the ECF sweep base or equity.
 
     for t in range(n):
         p_start = deal.operations_start_date if t == 0 else period_ends[t - 1]
@@ -66,9 +64,10 @@ def run(deal: Deal) -> DealResult:
         ledger = PeriodLedger(t)
         ledger.add_source("cfads", cfads)
 
-        # Per-tranche period bookkeeping. ``opening`` is the true pre-draw balance
+        # Per-tranche period bookkeeping. ``opening`` is the pre-period balance
         # (for the principal trace); ``accrual_balance`` is the balance interest
-        # actually accrues on (post facility draw, taken at period start).
+        # accrues on — equal to ``opening`` in v0.x, since facilities are funded at
+        # close (opening balance) and mid-life draws are deferred to v0.1.
         opening = {s.name: s.balance for s in debt_states}
         accrual_balance = {}
         draws_t = {s.name: 0.0 for s in debt_states}
@@ -83,15 +82,13 @@ def run(deal: Deal) -> DealResult:
         r_draw = {r.reserve_type: 0.0 for r in reserve_states}
         r_release = {r.reserve_type: 0.0 for r in reserve_states}
 
-        # Facility draw (non-CFADS source, increases the facility balance).
-        facility_draw = facility_in[t]
+        # Facilities are funded at close (opening balance); mid-life draws are
+        # deferred to v0.1 and rejected at input validation. No draw enters the
+        # operating pool, so ``cash`` is CFADS-origin only and the ECF sweep base
+        # (derived from ``cash`` below) stays pure. The ``facility_draws`` output
+        # column is 0 every period (principal trace: the draws term is 0).
+        facility_draw = 0.0
         cash = cfads
-        if facility_draw > 0:
-            facility_state.draw(facility_draw)
-            draws_t[facility_state.name] += facility_draw
-            cash += facility_draw
-            ledger.add_source("facility_draw", facility_draw)
-            audit.record(t, "facility_draw", f"{facility_state.name}: {facility_draw:,.0f} drawn")
 
         # --- Step 1: senior fees & admin -----------------------------------
         fees_due = _fees_for_period(deal, t)

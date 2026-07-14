@@ -13,6 +13,7 @@ trace still balances). Re-amortization on prepayment is deferred (documented).
 from typing import List
 
 from waterfall.data.schema import Tranche
+from waterfall.data.exceptions import InvalidInputError
 
 
 def build_schedule(tranche: Tranche, horizon_periods: int,
@@ -88,6 +89,10 @@ class TrancheState:
                  periods_per_year: int = 1):
         self.tranche = tranche
         self.balance = float(tranche.principal)
+        # Cumulative amount drawn against a facility's commitment. The at-close
+        # opening balance (the funded amount in v0.x) counts as the first draw, so
+        # further draws are capped at the undrawn commitment (see draw()).
+        self._drawn_total = self.balance
         self._ppy = periods_per_year
         # Resolved schedule geometry (mirrors build_schedule) — kept so the
         # schedule can be re-amortized over the remaining term on prepayment.
@@ -193,7 +198,26 @@ class TrancheState:
                 remaining -= pay
 
     def draw(self, amount: float) -> float:
-        """Facility draw (revolver / delayed-draw): increases the balance."""
+        """Facility draw (revolver / delayed-draw): increases the balance.
+
+        Enforces the commitment cap (methodology Capital Stack — "the commitment
+        cap is enforced"): cumulative draws (the at-close opening balance plus any
+        further draw) must not exceed the tranche's ``commitment``. A draw that
+        would breach it raises :class:`InvalidInputError` rather than silently
+        over-funding. A facility with no ``commitment`` set is uncapped.
+
+        In v0.x a non-zero ``facility_draws`` schedule is rejected at input
+        validation (mid-life draws deferred to v0.1), so the engine never calls
+        this during a run; the cap is a hard guard on the primitive itself.
+        """
         amount = max(amount, 0.0)
+        commitment = self.tranche.commitment
+        if commitment is not None and self._drawn_total + amount > commitment + 1e-6:
+            raise InvalidInputError(
+                f"tranche {self.name!r}: draw {amount:,.2f} would push cumulative "
+                f"draws to {self._drawn_total + amount:,.2f}, above the commitment "
+                f"{commitment:,.2f}"
+            )
+        self._drawn_total += amount
         self.balance += amount
         return amount

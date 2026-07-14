@@ -152,6 +152,19 @@ class Tranche:
             raise InvalidInputError(f"tranche {self.name!r}: amort_periods must be positive")
         if self.io_periods < 0:
             raise InvalidInputError(f"tranche {self.name!r}: io_periods must be non-negative")
+        # Commitment cap (enforced, methodology Capital Stack). The at-close opening
+        # balance (principal) is itself drawn against the commitment, so it may not
+        # exceed it; the running cap on further draws lives in TrancheState.draw.
+        if self.commitment is not None:
+            if not isinstance(self.commitment, Real) or self.commitment < 0:
+                raise InvalidInputError(
+                    f"tranche {self.name!r}: commitment must be a non-negative number"
+                )
+            if self.is_facility and self.principal > self.commitment:
+                raise InvalidInputError(
+                    f"tranche {self.name!r}: at-close funding (principal {self.principal}) "
+                    f"exceeds commitment {self.commitment}"
+                )
 
     @property
     def is_debt(self) -> bool:
@@ -342,6 +355,18 @@ class Deal:
         self._validate_period_series(self.equity_contributions, "equity_contributions")
         self._validate_period_series(self.facility_draws, "facility_draws")
         self._validate_period_series(self.event_proceeds, "event_proceeds")
+        # Mid-life facility draws are DEFERRED to v0.1 (methodology Capital Stack /
+        # Interest / Limitations): v0.x funds facilities at close only — the tranche's
+        # opening balance is the funded amount. A non-zero facility_draws schedule
+        # needs the deferred use-of-draw model (drawn cash must fund a designated use
+        # and never reach the ECF sweep base or equity), so reject it loudly rather
+        # than fold borrowed proceeds into the operating cash pool.
+        if self.facility_draws is not None and any(x > 0 for x in self.facility_draws):
+            raise UnsupportedFeatureError(
+                "mid-life facility draws deferred to v0.1; fund facilities at close "
+                "(the tranche's opening balance is the funded amount). A non-zero "
+                "facility_draws schedule is out of v0.x scope"
+            )
         if self.asset_value is not None and self.asset_value < 0:
             raise InvalidInputError("asset_value must be non-negative")
         if self.project_cost is not None and self.project_cost < 0:

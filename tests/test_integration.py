@@ -3,7 +3,9 @@
 Each asserts: run() does not raise spuriously, the per-period cash-conservation
 identity balances every period, and (for cure/revolver) CFADS stays operating-only.
 Scenarios: (a) surplus, (b) DSRA-draw distress, (c) maturity/reserve-release,
-(d) mid-life equity cash-injection cure, (e) revolver/delayed-draw facility draw.
+(d) mid-life equity cash-injection cure, (e) revolver/delayed-draw facility funded
+at close. (Mid-life facility draws are deferred to v0.1 — rejected at input
+validation, see test_facility_deferred.py.)
 """
 from datetime import date
 
@@ -61,9 +63,8 @@ def _deal(deal_type, scenario):
         equity_contributions = [0.0] * n
         equity_contributions[4] = 200_000.0
     elif scenario == "revolver":
+        # A facility funded at close (opening balance); v0.x takes no mid-life draw.
         tranches = _tranches(with_facility=True)
-        facility_draws = [0.0] * n
-        facility_draws[2] = 500_000.0
 
     kwargs = dict(
         deal_close_date=date(2024, 1, 1), operations_start_date=date(2024, 1, 1),
@@ -119,12 +120,15 @@ def test_cure_keeps_cfads_operating_only(deal_type):
 
 
 @pytest.mark.parametrize("deal_type", DEAL_TYPES)
-def test_revolver_draw_is_a_non_cfads_source(deal_type):
+def test_facility_funded_at_close_takes_no_mid_life_draw(deal_type):
     deal = _deal(deal_type, "revolver")
     result = run(deal)
-    assert result.periods[2].facility_draws == pytest.approx(500_000.0)
+    # v0.x funds facilities at close (opening balance); no mid-life draw enters, so
+    # the facility_draws column is 0 every period and CFADS stays operating-only.
+    for p in result.periods:
+        assert p.facility_draws == pytest.approx(0.0)
     for p, raw in zip(result.periods, deal.cfads_stream):
-        assert p.cfads == pytest.approx(raw)                 # draw not folded into CFADS
+        assert p.cfads == pytest.approx(raw)
 
 
 def test_plcr_only_computed_for_pf():
