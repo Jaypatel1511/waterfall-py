@@ -66,8 +66,11 @@ def run(deal: Deal) -> DealResult:
         ledger = PeriodLedger(t)
         ledger.add_source("cfads", cfads)
 
-        # Per-tranche period bookkeeping.
+        # Per-tranche period bookkeeping. ``opening`` is the true pre-draw balance
+        # (for the principal trace); ``accrual_balance`` is the balance interest
+        # actually accrues on (post facility draw, taken at period start).
         opening = {s.name: s.balance for s in debt_states}
+        accrual_balance = {}
         draws_t = {s.name: 0.0 for s in debt_states}
         scheduled_t = {s.name: 0.0 for s in debt_states}
         sweep_t = {s.name: 0.0 for s in debt_states}
@@ -101,6 +104,7 @@ def run(deal: Deal) -> DealResult:
         senior_interest_due = {}
         for s in senior_states:
             dcf = dates.day_count_fraction(p_start, p_end, s.tranche.day_count)
+            accrual_balance[s.name] = s.balance   # post-draw balance interest accrues on
             accrued = s.accrue_interest(dcf)
             senior_interest_due[s.name] = accrued
             interest_t[s.name] = accrued  # booked interest = accrued (paid in cash below)
@@ -162,6 +166,7 @@ def run(deal: Deal) -> DealResult:
         # --- Step 4: mezzanine debt service --------------------------------
         for s in mezz_states:
             dcf = dates.day_count_fraction(p_start, p_end, s.tranche.day_count)
+            accrual_balance[s.name] = s.balance
             accrued = s.accrue_interest(dcf)
             interest_t[s.name] = accrued
             if s.tranche.pik:
@@ -241,7 +246,7 @@ def run(deal: Deal) -> DealResult:
         for s in debt_states:
             dcf = dates.day_count_fraction(p_start, p_end, s.tranche.day_count)
             asrt.assert_interest_reconciliation(
-                s.name, t, s.tranche.coupon, opening[s.name], dcf, interest_t[s.name])
+                s.name, t, s.tranche.coupon, accrual_balance[s.name], dcf, interest_t[s.name])
             asrt.assert_principal_trace(
                 s.name, t, opening[s.name], draws_t[s.name], scheduled_t[s.name],
                 proceeds_t[s.name], sweep_t[s.name], s.balance)
