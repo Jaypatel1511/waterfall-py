@@ -1,0 +1,88 @@
+# CI-driven publish (methodology Release Process). Triggered only by a version
+# tag push, which Jay controls — this workflow never runs on branch pushes.
+# Publish uses OIDC Trusted Publishing (no stored API token); all actions are
+# SHA-pinned; the publish step runs on Python 3.11.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.11"
+      - name: Tag must match pyproject version
+        run: |
+          python - <<'PY'
+          import os, tomllib
+          with open("pyproject.toml", "rb") as fh:
+              version = tomllib.load(fh)["project"]["version"]
+          tag = os.environ["GITHUB_REF_NAME"]
+          expected = f"v{version}"
+          assert tag == expected, f"tag {tag!r} != pyproject version {expected!r}"
+          print("version guard OK:", tag)
+          PY
+
+  build:
+    needs: verify-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.11"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Upload dist
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b  # v4.5.0
+        with:
+          name: dist
+          path: dist/
+
+  test-wheel:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.11"
+      - name: Download dist
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
+        with:
+          name: dist
+          path: dist/
+      - name: Install wheel and smoke-test
+        run: |
+          pip install dist/*.whl pytest pandas numpy openpyxl
+          cd "$RUNNER_TEMP"
+          python -c "import os, waterfall; assert os.path.isfile(waterfall.get_methodology_path())"
+
+  publish:
+    needs: test-wheel
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC Trusted Publishing
+    steps:
+      - name: Download dist
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7f25271a4aa483500f742f9492b2ab5648d61011  # v1.12.4

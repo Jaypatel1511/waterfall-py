@@ -6,26 +6,61 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11"]
-
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pandas numpy openpyxl
+      - name: Run tests
+        run: PYTHONPATH=. pytest tests/ -v
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.python-version }}
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pytest pandas numpy requests openpyxl
-
-    - name: Run tests
-      run: |
-        PYTHONPATH=. pytest tests/ -v
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.11"
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+      - name: Wheel is clean (no test files) and bundles the methodology
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          whl = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(whl).namelist()
+          assert any(n.endswith("waterfall/methodology.md") for n in names), "methodology.md not bundled"
+          stray = [n for n in names if n.startswith("tests/") or "/tests/" in n or n.endswith("_test.py")]
+          assert not stray, f"stray test files in wheel: {stray}"
+          assert "waterfall_py.py" in names and "waterfallpy.py" in names, "dual-import shims missing"
+          print("wheel OK:", whl)
+          PY
+      - name: get_methodology_path resolves from the installed wheel
+        run: |
+          pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          python - <<'PY'
+          import os, waterfall, waterfall_py, waterfallpy
+          p = waterfall.get_methodology_path()
+          assert os.path.isfile(p), p
+          assert waterfall_py is waterfall and waterfallpy is waterfall
+          print("methodology resolves at", p)
+          PY
