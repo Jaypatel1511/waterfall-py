@@ -4,7 +4,13 @@ All notable changes to `waterfall-py` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-07-14
+
+First release of the rewritten tight-core engine. **Version starts at 0.2.0, not
+0.1.0:** an earlier, incompatible prototype was already published to PyPI as
+`waterfall-py` 0.1.0 (2026-04-24). PyPI versions are immutable, so this rewrite
+ships as 0.2.0 — a breaking change from that prototype's API (permitted under 0.x).
+
 
 ### Added
 - **v0.x tight-core engine** — `waterfall.run(deal)` applies the LOCKED
