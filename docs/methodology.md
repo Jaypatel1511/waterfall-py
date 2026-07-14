@@ -34,8 +34,8 @@ waterfall-py v0.x is a **tight core**: a period-by-period mechanical debt-waterf
 
 ## Interest Mechanics — LOCKED
 
-- **Rate types:** fixed, floating (index + spread, caps/floors), step-up, PIK (toggle per period), default-rate accrual.
-- **Floating indices:** SOFR, Term SOFR (1M/3M/6M). Reset default **in advance**; lookback days configurable. EURIBOR/other deferred with multi-currency.
+- **Rate types (v0.x):** fixed, PIK (toggle per period), default-rate accrual. **Deferred to v0.1:** floating (index + spread, caps/floors) and step-up. v0.x rejects floating/step-up inputs with `UnsupportedFeatureError` (fail-loud); the engine never silently models them as fixed.
+- **Floating indices (DEFERRED to v0.1, documented for continuity):** SOFR, Term SOFR (1M/3M/6M); reset in advance; lookback days configurable; EURIBOR/other with multi-currency. The SOFR/SIFMA-calendar machinery below is retained in the codebase for the v0.1 floating build but is not exercised by v0.x fixed-rate deals.
 - **Day-count (v0.x):** 30/360, ACT/360, ACT/365 (Fixed). **ACT/ACT dropped** — rare in loans; ISDA/ICMA/AFB variants diverge on leap years; ACT/365F covers the cases. *(LOW-4.)*
 - **Day-count default:** ACT/360 for US commercial bank loans — CRE senior and US project-finance bank debt alike. *(HIGH-3.)*
 - **Business-day convention (LOCKED):** **Modified Following**, default holiday calendar **U.S. Federal Reserve**. Applies to period-end and payment dates.
@@ -212,6 +212,7 @@ These audit assertions are the **primary defensibility mechanism for numeric out
 - No OID modeling
 - No sculpted-to-DSCR amortization (deferred — requires iterative solver)
 - No ACT/ACT day-count (30/360, ACT/360, ACT/365F only)
+- **No floating or step-up rates in v0.x — fixed-rate (and PIK / default-rate accrual) only; floating (SOFR/Term SOFR, caps/floors) and step-up deferred to v0.1 with its own methodology + hostile audit**
 - Single-currency only
 
 ## Definitional Basis (No External Authority) — LOCKED
