@@ -234,8 +234,29 @@ class Deal:
     fees: List[Fee] = field(default_factory=list)
     sweep: Optional[SweepConfig] = None
     project_life_periods: Optional[int] = None       # PF-only, for PLCR horizon
+    # Per-period non-CFADS cash flows (each, if given, must match len(cfads_stream)).
+    equity_contributions: Optional[List[float]] = None   # cures / equity cash injections
+    facility_draws: Optional[List[float]] = None         # revolver / delayed-draw fundings
+    event_proceeds: Optional[List[float]] = None         # asset-sale / insurance / issuance
+    # Covenant / close inputs.
+    asset_value: Optional[float] = None              # for LTV
+    project_cost: Optional[float] = None             # uses-of-funds at close (tie-out)
     construction_draw_schedule: Optional[List[float]] = None  # out of scope
     name: str = ""
+
+    def _validate_period_series(self, values, label):
+        if values is None:
+            return
+        if len(values) != self.num_periods:
+            raise InvalidInputError(
+                f"{label} has length {len(values)}, expected {self.num_periods} "
+                "(one per CFADS period)"
+            )
+        for i, v in enumerate(values):
+            if isinstance(v, bool) or not isinstance(v, Real):
+                raise InvalidInputError(f"{label}[{i}] must be numeric, got {v!r}")
+            if v < 0:
+                raise InvalidInputError(f"{label}[{i}] must be non-negative, got {v!r}")
 
     def __post_init__(self):
         # Out-of-scope construction modeling.
@@ -295,6 +316,14 @@ class Deal:
                     f"multi-currency is out of v0.x scope: tranche {t.name!r} is in "
                     f"{t.currency} but the deal is in {self.data_currency}"
                 )
+        # Per-period non-CFADS series must align with the CFADS horizon.
+        self._validate_period_series(self.equity_contributions, "equity_contributions")
+        self._validate_period_series(self.facility_draws, "facility_draws")
+        self._validate_period_series(self.event_proceeds, "event_proceeds")
+        if self.asset_value is not None and self.asset_value < 0:
+            raise InvalidInputError("asset_value must be non-negative")
+        if self.project_cost is not None and self.project_cost < 0:
+            raise InvalidInputError("project_cost must be non-negative")
 
     @property
     def num_periods(self) -> int:

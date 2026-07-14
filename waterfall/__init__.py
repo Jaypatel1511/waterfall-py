@@ -11,7 +11,12 @@ Dual-import shim (methodology Release Process, WP #6): ``import waterfall_py`` a
 """
 from importlib import resources
 
-from waterfall.data import exceptions
+from waterfall.data import exceptions, schema
+from waterfall.data.schema import (
+    Deal, Tranche, ReserveConfig, CovenantConfig, Fee, SweepConfig, SweepBand,
+)
+from waterfall.models.waterfall import run
+from waterfall.report.schema import DealResult, PeriodResult
 from waterfall.data.exceptions import (
     WaterfallError,
     InvalidInputError,
@@ -40,7 +45,10 @@ def get_methodology_path() -> str:
 __all__ = [
     "__version__",
     "get_methodology_path",
-    "exceptions",
+    "run",
+    "Deal", "Tranche", "ReserveConfig", "CovenantConfig", "Fee",
+    "SweepConfig", "SweepBand", "DealResult", "PeriodResult",
+    "exceptions", "schema",
     "WaterfallError",
     "InvalidInputError",
     "UnsupportedFeatureError",
