@@ -162,6 +162,8 @@ def run(deal: Deal) -> DealResult:
             if funded > 0:
                 r_funding[r.reserve_type] += funded
                 ledger.add_use("reserve_funding", funded)
+                audit.record(t, "reserve_replenish",
+                             f"{r.reserve_type} replenished {funded:,.0f} toward required {r.required:,.0f}")
 
         # --- Step 4: mezzanine debt service --------------------------------
         for s in mezz_states:
@@ -223,6 +225,8 @@ def run(deal: Deal) -> DealResult:
                 if released > 0:
                     r_release[r.reserve_type] += released
                     release_total += released
+                    audit.record(t, "reserve_release",
+                                 f"{r.reserve_type} released {released:,.0f} to the proceeds path")
         event_proceeds = proceeds_in[t]
         proceeds_pool = release_total + event_proceeds
         if release_total > 0:
@@ -233,6 +237,9 @@ def run(deal: Deal) -> DealResult:
                                              "proceeds", sweep_t, proceeds_t)
         if proceeds_to_debt > 0:
             ledger.add_use("proceeds_to_debt", proceeds_to_debt)
+            audit.record(t, "proceeds_applied",
+                         f"{proceeds_to_debt:,.0f} of reserve-release / event proceeds "
+                         "applied to outstanding debt in priority order")
         proceeds_residual = proceeds_pool - proceeds_to_debt
         proceeds_to_equity = 0.0
         # Residual only exists once all debt is retired (proceeds absorbed in priority),
@@ -369,6 +376,10 @@ def _evaluate_covenants(deal, t, cfads, senior_interest_due, senior_sched_due,
     dscr_senior = cov.dscr(cfads, senior_ds, mezz_ds, "senior")
     future = [float(x) for x in deal.cfads_stream[t + 1:]]
     senior_cost = _weighted_senior_cost(deal) / periods_per_year
+    if any(c.metric in ("LLCR", "PLCR") for c in deal.covenants):
+        audit.record(t, "discount_rate",
+                     f"LLCR/PLCR present-valued at the weighted senior debt cost "
+                     f"{senior_cost:.6f} per period")
 
     status = {}
     for c in deal.covenants:
