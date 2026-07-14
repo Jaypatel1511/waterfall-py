@@ -1,18 +1,43 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "waterfall-py"
 version = "0.1.0"
-description = "Python debt waterfall engine for structured finance"
+description = "Period-by-period mechanical debt-waterfall engine for structured finance"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
+authors = [{name = "Jay Patel"}]
+keywords = ["waterfall", "structured-finance", "cfads", "dscr", "project-finance", "cre"]
+classifiers = [
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+]
 dependencies = [
     "pandas>=1.4.0",
     "numpy>=1.21.0",
+    "openpyxl>=3.0.0",
 ]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
 
 [project.urls]
 Homepage = "https://github.com/Jaypatel1511/waterfall-py"
+
+[tool.setuptools]
+# The two import-alias shims are top-level single-file modules (WP #6 dual import).
+py-modules = ["waterfall_py", "waterfallpy"]
+
+[tool.setuptools.packages.find]
+include = ["waterfall*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+# Bundle the methodology into the wheel (importlib.resources -> get_methodology_path()).
+waterfall = ["methodology.md"]
