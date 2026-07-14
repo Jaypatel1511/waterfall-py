@@ -133,6 +133,7 @@ def test_plcr_only_computed_for_pf():
         period_frequency="Q", deal_type="PF", tranches=_tranches(),
         cfads_stream=[900_000.0] * 8, data_currency="USD", reporting_basis="calendar",
         covenants=[CovenantConfig(metric="PLCR", default=1.10)],
+        project_life_periods=8,   # PF PLCR requires an explicit project-life horizon
     ))
     import math
     # PF computes a PLCR status other than "n/a" while a positive senior balance exists.

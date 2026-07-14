@@ -65,5 +65,17 @@ def test_construction_draw_schedule():
         _base_deal(construction_draw_schedule=[100.0, 200.0])
 
 
+def test_floating_rate_is_rejected_not_silently_fixed():
+    # M2: floating/step-up accrual is out of v0.x scope -> fail loud rather than
+    # silently model the tranche as a fixed coupon.
+    with pytest.raises(UnsupportedFeatureError):
+        Tranche("A", "senior", 1_000_000.0, coupon=0.06, rate_type="floating")
+
+
+def test_step_up_rate_is_rejected():
+    with pytest.raises(UnsupportedFeatureError):
+        Tranche("A", "senior", 1_000_000.0, coupon=0.06, rate_type="step_up")
+
+
 def test_all_out_of_scope_are_waterfall_errors():
     assert issubclass(UnsupportedFeatureError, WaterfallError)

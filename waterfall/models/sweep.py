@@ -14,12 +14,6 @@ steps 6-7 (no cash leaks to equity while the trap is active).
 from waterfall.data.schema import SweepConfig
 
 
-def ecf(cfads: float, senior_fees: float, senior_ds: float,
-        reserve_funding: float, mezz_ds: float) -> float:
-    """ECF = CFADS minus ladder steps 1-4 (may be negative when CFADS is short)."""
-    return cfads - senior_fees - senior_ds - reserve_funding - mezz_ds
-
-
 def sweep_pct_for_leverage(config, leverage: float) -> float:
     """Sweep percentage for the current ``leverage`` from the banded config.
 

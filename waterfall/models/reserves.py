@@ -67,6 +67,27 @@ class ReserveState:
         self.balance += amount
         return amount
 
+    def topup_room(self) -> float:
+        """Step-6b headroom: distance to the discretionary target, capped per period.
+
+        Zero unless a ``discretionary_target`` is configured (6a/6b are opt-in).
+        """
+        target = self.config.discretionary_target
+        if target is None:
+            return 0.0
+        room = max(target - self.balance, 0.0)
+        cap = self.config.topup_cap_per_period
+        if cap is not None:
+            room = min(room, cap)
+        return room
+
+    def discretionary_top_up(self, available: float) -> float:
+        """Apply a step-6b discretionary top-up from ``available`` (capped at the
+        room to the discretionary target). Returns the amount added."""
+        added = min(max(available, 0.0), self.topup_room())
+        self.balance += added
+        return added
+
     def release(self) -> float:
         """Release the full balance (trigger/maturity); returns released cash."""
         released = self.balance

@@ -88,6 +88,13 @@ class TrancheState:
                  periods_per_year: int = 1):
         self.tranche = tranche
         self.balance = float(tranche.principal)
+        self._ppy = periods_per_year
+        # Resolved schedule geometry (mirrors build_schedule) — kept so the
+        # schedule can be re-amortized over the remaining term on prepayment.
+        term = tranche.term_periods or horizon_periods
+        self._term = min(term, horizon_periods)
+        self._amort = tranche.amort_periods or self._term
+        self._io = tranche.io_periods
         self.schedule = build_schedule(tranche, horizon_periods, periods_per_year)
 
     # --- identity helpers ---
@@ -131,16 +138,59 @@ class TrancheState:
         self.balance -= paid
         return paid, available - paid, due - paid
 
-    def apply_prepayment(self, amount: float, category: str) -> float:
+    def apply_prepayment(self, amount: float, category: str,
+                         period_index: int = None) -> float:
         """Apply a prepayment/sweep (capped at balance); returns the amount applied.
 
         ``category`` labels the movement for the principal trace: "sweep" for the
         step-5 ECF sweep, "proceeds" for the separate proceeds path / mandatory
-        prepayments.
+        prepayments. When ``recompute_on_prepayment`` is set (methodology default)
+        and ``period_index`` is supplied, the remaining schedule is re-amortized
+        over the remaining term on the reduced balance.
         """
         applied = min(max(amount, 0.0), self.balance)
         self.balance -= applied
+        if (applied > 0 and period_index is not None
+                and self.tranche.recompute_on_prepayment and self.balance > 1e-9):
+            self._reamortize(period_index)
         return applied
+
+    def _reamortize(self, from_period: int) -> None:
+        """Rebuild ``schedule[from_period+1:]`` so the reduced balance amortizes over
+        the remaining term (methodology "recompute on prepayment: default re-amortize").
+
+        Bullet/IO tranches still balloon the whole balance at maturity (re-amort is a
+        no-op on their profile). Amortizing tranches re-level on the new balance over
+        the remaining amortization window, leaving any balloon at maturity smaller.
+        """
+        n = len(self.schedule)
+        term, io = self._term, self._io
+        if from_period >= term - 1:
+            return  # at/after maturity: nothing left to reschedule
+        for i in range(from_period + 1, n):
+            self.schedule[i] = 0.0
+        if self.balance <= 0:
+            return
+        start = max(from_period + 1, io)
+        amort_window = self._amort - io
+        if self.tranche.amort_type in ("bullet", "io") or amort_window <= 0 or term - io <= 0:
+            self.schedule[term - 1] = self.balance   # balloon the remaining balance
+            return
+        elapsed = max(0, (from_period + 1) - io)
+        remaining_window = max(amort_window - elapsed, 1)
+        rate = self.tranche.coupon / self._ppy
+        installments = _installments(self.tranche.amort_type, self.balance,
+                                     remaining_window, rate)
+        remaining = self.balance
+        for k, i in enumerate(range(start, term)):
+            if i == term - 1:
+                self.schedule[i] = remaining          # maturity: repay remaining (balloon)
+                remaining = 0.0
+            else:
+                inst = installments[k] if k < len(installments) else remaining
+                pay = min(inst, remaining)
+                self.schedule[i] = pay
+                remaining -= pay
 
     def draw(self, amount: float) -> float:
         """Facility draw (revolver / delayed-draw): increases the balance."""

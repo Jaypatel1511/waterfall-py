@@ -63,6 +63,18 @@ def test_reserve_roll_forward_fires():
                                          closing=120_000.0)   # wrong
 
 
+def test_reserve_roll_forward_counts_the_step6b_topup_term():
+    # A valid roll-forward with a NONZERO step-6b top-up must pass; dropping the
+    # ``+ topups`` term from the assertion would make this fire (audit M1 probe).
+    asrt.assert_reserve_roll_forward("capex", 0, opening=100_000.0, funding=0.0,
+                                     topups=90_000.0, draws=0.0, releases=0.0,
+                                     closing=190_000.0)
+    with pytest.raises(ReserveRollForwardError):
+        asrt.assert_reserve_roll_forward("capex", 0, opening=100_000.0, funding=0.0,
+                                         topups=90_000.0, draws=0.0, releases=0.0,
+                                         closing=100_000.0)   # ignores the top-up
+
+
 def test_capital_account_fires():
     with pytest.raises(CapitalAccountError):
         asrt.assert_capital_account(0, opening=3_000_000.0, contributions=100_000.0,

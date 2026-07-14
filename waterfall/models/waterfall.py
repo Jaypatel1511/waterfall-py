@@ -199,8 +199,8 @@ def run(deal: Deal) -> DealResult:
         leverage = total_debt / annualized_cfads if annualized_cfads > 0 else float("inf")
         sweep_pct = sw.sweep_pct_for_leverage(deal.sweep, leverage)
         swept, retained = sw.apply_sweep(ecf_base, sweep_pct, cash_trap)
-        swept_applied = _apply_prepayment(senior_states + mezz_states, swept, "sweep",
-                                          sweep_t, proceeds_t)
+        swept_applied = _apply_prepayment([senior_states, mezz_states], swept, "sweep",
+                                          sweep_t, proceeds_t, t)
         cash -= swept_applied
         if swept_applied > 0:
             ledger.add_use("ecf_sweep", swept_applied)
@@ -208,11 +208,39 @@ def run(deal: Deal) -> DealResult:
                          f"ECF sweep {swept_applied:,.0f} ({'100% (cash-trap)' if cash_trap else f'{sweep_pct:.0%}'})")
 
         # --- Steps 6-7: junior uses / residual to equity -------------------
+        # 6a growth/discretionary capex is scoped out of v0.x (no growth-capex spend
+        # input; documented limitation). 6b discretionary reserve top-ups and 6c
+        # permitted distributions are modeled below from retained ECF.
         junior = {"growth_capex": 0.0, "reserve_topups": 0.0, "distributions": 0.0}
         equity_distribution = 0.0
-        if not cash_trap and cash > 1e-12:
-            equity_distribution = cash            # 6a/6b unmodeled in v0.x -> all retained to 6c/7
-            junior["distributions"] = equity_distribution
+        debt_outstanding = sum(s.balance for s in debt_states)
+        if not cash_trap:
+            # Step 6b: discretionary reserve top-ups (up to each reserve's cap).
+            for r in reserve_states:
+                if cash <= 1e-12:
+                    break
+                topped = r.discretionary_top_up(cash)
+                if topped > 0:
+                    r_topup[r.reserve_type] += topped
+                    junior["reserve_topups"] += topped
+                    cash -= topped
+                    ledger.add_use("reserve_topup", topped)
+                    audit.record(t, "reserve_topup",
+                                 f"{r.reserve_type} discretionary top-up {topped:,.0f} (step 6b)")
+            # Steps 6c/7: permitted distributions, then residual to equity.
+            if cash > 1e-12:
+                equity_distribution = cash
+                junior["distributions"] = equity_distribution
+                cash = 0.0
+                ledger.add_use("equity_distribution", equity_distribution)
+        elif debt_outstanding <= 1e-9 and cash > 1e-12:
+            # C1: trap active but the forced 100% sweep retired ALL debt -> the trap
+            # is moot (no lender left to protect); residual operating cash flows to
+            # step-7 equity, mirroring the separate proceeds path (methodology
+            # cash-trap paragraph + step 7). Without this the residual would be
+            # neither swept (no debt) nor distributed (steps 6-7 gated under a trap
+            # while debt remains), stranding cash and firing cash-conservation.
+            equity_distribution = cash
             cash = 0.0
             ledger.add_use("equity_distribution", equity_distribution)
 
@@ -233,8 +261,8 @@ def run(deal: Deal) -> DealResult:
             ledger.add_source("reserve_release", release_total)
         if event_proceeds > 0:
             ledger.add_source("event_proceeds", event_proceeds)
-        proceeds_to_debt = _apply_prepayment(senior_states + mezz_states, proceeds_pool,
-                                             "proceeds", sweep_t, proceeds_t)
+        proceeds_to_debt = _apply_prepayment([senior_states, mezz_states], proceeds_pool,
+                                             "proceeds", sweep_t, proceeds_t, t)
         if proceeds_to_debt > 0:
             ledger.add_use("proceeds_to_debt", proceeds_to_debt)
             audit.record(t, "proceeds_applied",
@@ -324,8 +352,29 @@ def _pay_pro_rata(due_map, cash):
     return {k: v * ratio for k, v in due_map.items()}
 
 
-def _apply_prepayment(states, amount, category, sweep_t, proceeds_t):
-    """Apply ``amount`` to outstanding balances pro-rata by balance; return total applied."""
+def _apply_prepayment(groups, amount, category, sweep_t, proceeds_t, period_index):
+    """Apply ``amount`` to debt prepayment in strict priority order.
+
+    ``groups`` is an ordered list of tranche-state groups (senior group, then
+    mezzanine group). A junior group is only reached once every senior group is
+    fully retired — never pari-passu across seniority (methodology step 5 / the
+    separate proceeds path). Within a group, allocation is pro-rata by current
+    balance (pari-passu). Returns the total applied.
+    """
+    remaining = max(amount, 0.0)
+    applied_total = 0.0
+    for group in groups:
+        if remaining <= 1e-12:
+            break
+        applied = _apply_within_group(group, remaining, category, sweep_t,
+                                      proceeds_t, period_index)
+        applied_total += applied
+        remaining -= applied
+    return applied_total
+
+
+def _apply_within_group(states, amount, category, sweep_t, proceeds_t, period_index):
+    """Apply ``amount`` pro-rata by balance across one pari-passu group."""
     amount = max(amount, 0.0)
     total_bal = sum(s.balance for s in states)
     if amount <= 0 or total_bal <= 0:
@@ -337,7 +386,7 @@ def _apply_prepayment(states, amount, category, sweep_t, proceeds_t):
             continue
         share = min(remaining, amount * (s.balance / total_bal), s.balance) \
             if amount < total_bal else min(remaining, s.balance)
-        applied = s.apply_prepayment(share, category)
+        applied = s.apply_prepayment(share, category, period_index)
         applied_total += applied
         remaining -= applied
         if category == "sweep":
@@ -349,7 +398,7 @@ def _apply_prepayment(states, amount, category, sweep_t, proceeds_t):
         for s in states:
             if remaining <= 0:
                 break
-            applied = s.apply_prepayment(remaining, category)
+            applied = s.apply_prepayment(remaining, category, period_index)
             applied_total += applied
             remaining -= applied
             if category == "sweep":
@@ -374,7 +423,16 @@ def _evaluate_covenants(deal, t, cfads, senior_interest_due, senior_sched_due,
     mezz_ds = sum(interest_t.get(s.name, 0.0) + (s.schedule[t] if t < len(s.schedule) else 0.0)
                   for s in mezz_states)
     dscr_senior = cov.dscr(cfads, senior_ds, mezz_ds, "senior")
-    future = [float(x) for x in deal.cfads_stream[t + 1:]]
+    # LLCR and PLCR use DISTINCT horizons (methodology Covenant Pack):
+    #   LLCR = PV(CFADS to *loan maturity*) / senior balance
+    #   PLCR = PV(CFADS to *end of project life*) / senior balance  (PF-only)
+    # The senior loan matures at the latest senior term; project life extends
+    # beyond it via project_life_periods.
+    n = deal.num_periods
+    llcr_end = max(min(tr.term_periods or n, n) for tr in deal.senior_tranches)
+    llcr_future = [float(x) for x in deal.cfads_stream[t + 1: llcr_end]]
+    plcr_end = min(deal.project_life_periods, n) if deal.project_life_periods else n
+    plcr_future = [float(x) for x in deal.cfads_stream[t + 1: plcr_end]]
     senior_cost = _weighted_senior_cost(deal) / periods_per_year
     if any(c.metric in ("LLCR", "PLCR") for c in deal.covenants):
         audit.record(t, "discount_rate",
@@ -386,9 +444,9 @@ def _evaluate_covenants(deal, t, cfads, senior_interest_due, senior_sched_due,
         if c.metric == "DSCR":
             value = cov.dscr(cfads, senior_ds, mezz_ds, c.denominator)
         elif c.metric == "LLCR":
-            value = cov.llcr(future, senior_balance, senior_cost)
+            value = cov.llcr(llcr_future, senior_balance, senior_cost)
         elif c.metric == "PLCR":
-            value = cov.plcr(future, senior_balance, senior_cost, deal.deal_type)
+            value = cov.plcr(plcr_future, senior_balance, senior_cost, deal.deal_type)
         elif c.metric == "LTV":
             value = cov.ltv(total_debt, deal.asset_value or 0.0)
         elif c.metric == "debt_yield":

@@ -33,7 +33,15 @@ _OUT_OF_SCOPE_AMORT = {
     "sculpted": "sculpted amortization (requires an iterative solver)",
     "sculpted_to_dscr": "sculpted-to-DSCR amortization (requires an iterative solver)",
 }
-RATE_TYPES = ("fixed", "floating", "step_up", "pik")
+RATE_TYPES = ("fixed", "pik")
+# Floating / step-up accrual (index resets, caps/floors, SOFR fixings on the SIFMA
+# calendar) are not modeled in v0.x. Rather than silently treat them as a fixed
+# coupon, reject them loudly — the `dates.adjust` / SIFMA machinery is present but
+# forward-looking. (Audit M2: do not accept-and-ignore.)
+_OUT_OF_SCOPE_RATES = {
+    "floating": "floating-rate accrual (index resets, caps/floors, SOFR fixings)",
+    "step_up": "step-up-rate accrual",
+}
 RESERVE_TYPES = ("DSRA", "IRA", "MRA", "capex", "lease_up", "TI_LC")
 COVENANT_METRICS = (
     "DSCR", "LLCR", "PLCR", "LTV", "debt_yield",
@@ -92,6 +100,9 @@ class Tranche:
     is_facility: bool = False             # revolver / delayed-draw (facility draws)
     commitment: Optional[float] = None    # undrawn commitment for facilities
     pik: bool = False
+    recompute_on_prepayment: bool = True  # methodology default: re-amortize over the
+                                          # remaining term after a prepayment/sweep.
+                                          # False -> keep installment / shorten term.
 
     def __post_init__(self):
         if self.tranche_type in _OUT_OF_SCOPE_TRANCHES:
@@ -105,6 +116,11 @@ class Tranche:
         if self.amort_type not in AMORT_TYPES:
             raise InvalidInputError(
                 f"unknown amort_type {self.amort_type!r}; supported: {AMORT_TYPES}"
+            )
+        if self.rate_type in _OUT_OF_SCOPE_RATES:
+            raise UnsupportedFeatureError(
+                f"{_OUT_OF_SCOPE_RATES[self.rate_type]} is out of v0.x scope "
+                "(fixed and PIK only); supply a fixed coupon"
             )
         if self.rate_type not in RATE_TYPES:
             raise InvalidInputError(
@@ -152,6 +168,8 @@ class ReserveConfig:
     opening_balance: float = 0.0           # pre-funded at close (opening balance at period 0)
     release_period: Optional[int] = None   # user-supplied release trigger (period index)
     lc_funded: bool = False                 # LC alternative -> no cash, "available" for shortfall
+    discretionary_target: Optional[float] = None   # step-6b top-up target (above required)
+    topup_cap_per_period: Optional[float] = None   # step-6b per-period top-up cap
 
     def __post_init__(self):
         if self.reserve_type not in RESERVE_TYPES:
@@ -162,6 +180,10 @@ class ReserveConfig:
             raise InvalidInputError("reserve opening_balance must be non-negative")
         if self.target_amount is not None and self.target_amount < 0:
             raise InvalidInputError("reserve target_amount must be non-negative")
+        if self.discretionary_target is not None and self.discretionary_target < 0:
+            raise InvalidInputError("reserve discretionary_target must be non-negative")
+        if self.topup_cap_per_period is not None and self.topup_cap_per_period < 0:
+            raise InvalidInputError("reserve topup_cap_per_period must be non-negative")
 
 
 @dataclass
@@ -324,6 +346,17 @@ class Deal:
             raise InvalidInputError("asset_value must be non-negative")
         if self.project_cost is not None and self.project_cost < 0:
             raise InvalidInputError("project_cost must be non-negative")
+        if self.project_life_periods is not None and self.project_life_periods <= 0:
+            raise InvalidInputError("project_life_periods must be positive")
+        # PLCR horizon = end of project life; a PF PLCR covenant therefore requires
+        # project_life_periods (CRE has no project life and reports PLCR as n/a).
+        if (self.deal_type == "PF"
+                and self.project_life_periods is None
+                and any(c.metric == "PLCR" for c in self.covenants)):
+            raise InvalidInputError(
+                "project_life_periods is required for a PLCR covenant on a PF deal "
+                "(PLCR horizon = end of project life)"
+            )
 
     @property
     def num_periods(self) -> int:

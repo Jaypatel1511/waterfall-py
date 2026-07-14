@@ -31,6 +31,11 @@ LIMITATIONS = [
     "No sculpted-to-DSCR amortization (deferred — requires iterative solver)",
     "No ACT/ACT day-count (30/360, ACT/360, ACT/365F only)",
     "Single-currency only",
+    "No floating / step-up rate accrual (fixed and PIK only in v0.x; floating/step-up "
+    "rate_type is rejected with UnsupportedFeatureError, not silently modeled as fixed)",
+    "No step-6a growth / discretionary capex bucket (requires a growth-capex spend "
+    "input; step-6b discretionary reserve top-ups and step-6c distributions are modeled)",
+    STANDARD_DISCLAIMER,
 ]
 
 INTERPRETATION = (

@@ -10,19 +10,6 @@ from waterfall.models import sweep
 from waterfall.data.schema import SweepConfig, SweepBand
 
 
-# --- ECF = residual after steps 1-4 --------------------------------------
-def test_ecf_is_residual_after_steps_1_to_4():
-    v = sweep.ecf(cfads=1_000_000, senior_fees=20_000, senior_ds=500_000,
-                  reserve_funding=80_000, mezz_ds=100_000)
-    assert v == pytest.approx(1_000_000 - 20_000 - 500_000 - 80_000 - 100_000)
-
-
-def test_ecf_can_be_negative_when_cfads_short():
-    v = sweep.ecf(cfads=100_000, senior_fees=0, senior_ds=500_000,
-                  reserve_funding=0, mezz_ds=0)
-    assert v == pytest.approx(-400_000)
-
-
 # --- Leverage-banded sweep percentage ------------------------------------
 def _cfg():
     return SweepConfig(bands=[SweepBand(3.0, 0.5), SweepBand(4.0, 0.75), SweepBand(5.0, 1.0)],

@@ -35,6 +35,9 @@ def test_disclaimer_present_in_three_locations():
     # string; 3) rendered report text.
     assert STANDARD_DISCLAIMER in result.interpretation
     assert any("input-preparer" in lim for lim in result.limitations)
+    # L2: the disclaimer appears literally in DealResult.limitations (a named
+    # methodology location), not only via interpretation.
+    assert STANDARD_DISCLAIMER in result.limitations
     rendered = export.render_text(result)
     assert STANDARD_DISCLAIMER in rendered
     # The DealResult also exposes the disclaimer directly.
