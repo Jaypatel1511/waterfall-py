@@ -84,6 +84,8 @@ class Tranche:
     day_count: str = dates.ACT_360
     amort_type: str = "bullet"
     term_periods: Optional[int] = None    # periods to maturity (None -> whole horizon)
+    amort_periods: Optional[int] = None   # amortization term; > term_periods -> balloon
+                                          # at maturity ("30-due-in-10"). None -> term_periods.
     io_periods: int = 0                   # leading interest-only periods
     custom_principal: Optional[List[float]] = None   # per-period scheduled principal
     currency: Optional[str] = None        # None -> deal currency; else multi-currency guard
@@ -128,6 +130,12 @@ class Tranche:
             raise InvalidInputError(f"tranche {self.name!r}: coupon must be in [0, 1)")
         if self.currency is not None and self.currency not in ISO_4217:
             raise InvalidInputError(f"tranche {self.name!r}: unknown currency {self.currency!r}")
+        if self.term_periods is not None and self.term_periods <= 0:
+            raise InvalidInputError(f"tranche {self.name!r}: term_periods must be positive")
+        if self.amort_periods is not None and self.amort_periods <= 0:
+            raise InvalidInputError(f"tranche {self.name!r}: amort_periods must be positive")
+        if self.io_periods < 0:
+            raise InvalidInputError(f"tranche {self.name!r}: io_periods must be non-negative")
 
     @property
     def is_debt(self) -> bool:
