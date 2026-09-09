@@ -28,7 +28,11 @@ dependencies = [
 test = ["pytest>=7.0"]
 
 [project.urls]
-Homepage = "https://github.com/Jaypatel1511/waterfall-py"
+Homepage = "https://jaypatel1511.github.io/cdfi-superpowers/"
+Repository = "https://github.com/Jaypatel1511/waterfall-py"
+Documentation = "https://github.com/Jaypatel1511/waterfall-py#readme"
+Issues = "https://github.com/Jaypatel1511/waterfall-py/issues"
+Changelog = "https://github.com/Jaypatel1511/waterfall-py/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 # The two import-alias shims are top-level single-file modules (WP #6 dual import).
