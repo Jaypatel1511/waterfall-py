@@ -14,7 +14,11 @@ permissions:
 
 jobs:
   verify-version:
-    runs-on: ubuntu-latest
+    # Runner pinned, not `ubuntu-latest`: actions/python-versions ships NO Python
+    # 3.9 build for ubuntu-26.04, and the `ubuntu-latest` label moves to Ubuntu 26
+    # on 2026-10-19. Remove this pin once this repo's Python floor rises above 3.9
+    # and every version in every matrix here has an ubuntu-26.04 build.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Set up Python
@@ -35,7 +39,11 @@ jobs:
 
   build:
     needs: verify-version
-    runs-on: ubuntu-latest
+    # Runner pinned, not `ubuntu-latest`: actions/python-versions ships NO Python
+    # 3.9 build for ubuntu-26.04, and the `ubuntu-latest` label moves to Ubuntu 26
+    # on 2026-10-19. Remove this pin once this repo's Python floor rises above 3.9
+    # and every version in every matrix here has an ubuntu-26.04 build.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Set up Python
@@ -54,7 +62,11 @@ jobs:
 
   test-wheel:
     needs: build
-    runs-on: ubuntu-latest
+    # Runner pinned, not `ubuntu-latest`: actions/python-versions ships NO Python
+    # 3.9 build for ubuntu-26.04, and the `ubuntu-latest` label moves to Ubuntu 26
+    # on 2026-10-19. Remove this pin once this repo's Python floor rises above 3.9
+    # and every version in every matrix here has an ubuntu-26.04 build.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Set up Python
@@ -74,7 +86,11 @@ jobs:
 
   publish:
     needs: test-wheel
-    runs-on: ubuntu-latest
+    # Runner pinned, not `ubuntu-latest`: actions/python-versions ships NO Python
+    # 3.9 build for ubuntu-26.04, and the `ubuntu-latest` label moves to Ubuntu 26
+    # on 2026-10-19. Remove this pin once this repo's Python floor rises above 3.9
+    # and every version in every matrix here has an ubuntu-26.04 build.
+    runs-on: ubuntu-24.04
     environment: pypi
     permissions:
       id-token: write   # OIDC Trusted Publishing
